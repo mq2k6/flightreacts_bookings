@@ -1,7 +1,18 @@
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+
+import HomePage from "./pages/Homepage";
 import LogInSignUp from "./pages/LogInSignUp";
 
-// Only the login screen exists so far. Add the other Figma screens
-// to src/components and swap them in here (or add a router) as you go.
 export default function App() {
-  return <LogInSignUp />;
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<LogInSignUp />} />
+        <Route path="/home" element={<HomePage />} />
+
+        {/* Redirect unknown URLs to login */}
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
 }
