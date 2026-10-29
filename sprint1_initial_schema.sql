@@ -87,7 +87,7 @@ CREATE TABLE passenger_seat (
     cancelled_at     TIMESTAMPTZ,
     refund_cents     INTEGER,
     checked_in_at    TIMESTAMPTZ
-);
+);~
 
 -- Only one confirmed booking per seat on a flight
 CREATE UNIQUE INDEX one_booking_per_seat
