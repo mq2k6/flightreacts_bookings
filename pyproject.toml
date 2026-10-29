@@ -1,0 +1,17 @@
+[project]
+name = "flightreacts-bookings"
+version = "0.1.0"
+description = "FlightReacts Bookings"
+readme = "README.md"
+authors = [
+    { name = "Mustafa Qasim", email = "4qas.mus@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+[project.scripts]
+flightreacts-bookings = "flightreacts_bookings:main"
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14.0"]
+build-backend = "uv_build"
