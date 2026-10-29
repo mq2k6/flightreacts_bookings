@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/* Lets Figroot's "font-inter" class work (Inter is loaded in index.html) */
+@theme {
+  --font-inter: "Inter", sans-serif;
+}
