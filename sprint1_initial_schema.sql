@@ -15,17 +15,16 @@ CREATE TABLE airport (
 -- Planes
 CREATE TABLE plane (
     id            SERIAL      PRIMARY KEY,
-    registration  VARCHAR(10) NOT NULL UNIQUE,
+    total_seats   INTEGER NOT NULL,
     model         VARCHAR(50) NOT NULL
 );
 
 -- Seats on each plane
 CREATE TABLE seat (
-    id        SERIAL      PRIMARY KEY,
     plane_id  INTEGER     NOT NULL REFERENCES plane(id) ON DELETE CASCADE,
     seat_no   VARCHAR(3)  NOT NULL,
     tier      VARCHAR(10) NOT NULL CHECK (tier IN ('premium', 'standard', 'economy')),
-    UNIQUE (plane_id, seat_no)
+    PRIMARY KEY (plane_id, seat_no)
 );
 
 -- Flights
@@ -62,7 +61,7 @@ CREATE TABLE passenger (
 CREATE TABLE staff (
     passenger_id  INTEGER     PRIMARY KEY REFERENCES passenger(id) ON DELETE CASCADE,
     employee_no   VARCHAR(10) NOT NULL UNIQUE,
-    role          VARCHAR(10) NOT NULL DEFAULT 'staff' CHECK (role IN ('staff', 'admin'))
+    employee_type VARCHAR(10) NOT NULL DEFAULT 'staff' CHECK (role IN ('staff', 'admin'))
 );
 
 -- Passenger seats (bookings)
@@ -73,7 +72,6 @@ CREATE TABLE passenger_seat (
     flight_id        INTEGER      NOT NULL REFERENCES flight(id),
     seat_id          INTEGER      NOT NULL REFERENCES seat(id),
     traveler_name    VARCHAR(150) NOT NULL,
-    passport_no      VARCHAR(9)   NOT NULL,
     base_fare_cents  INTEGER      NOT NULL,
     taxes_cents      INTEGER      NOT NULL,
     fees_cents       INTEGER      NOT NULL,
@@ -92,8 +90,5 @@ CREATE TABLE passenger_seat (
 -- Only one confirmed booking per seat on a flight
 CREATE UNIQUE INDEX one_booking_per_seat
     ON passenger_seat (flight_id, seat_id) WHERE status = 'confirmed';
-
-CREATE INDEX passenger_seat_passenger_idx ON passenger_seat (passenger_id, status);
-CREATE INDEX passenger_seat_flight_idx    ON passenger_seat (flight_id, status);
 
 COMMIT;
