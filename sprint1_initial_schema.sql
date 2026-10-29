@@ -21,10 +21,11 @@ CREATE TABLE plane (
 
 -- Seats on each plane
 CREATE TABLE seat (
-    plane_id  INTEGER     NOT NULL REFERENCES plane(id) ON DELETE CASCADE,
-    seat_no   VARCHAR(3)  NOT NULL,
+    id        SERIAL     PRIMARY KEY,
+    plane_id  INTEGER    NOT NULL REFERENCES plane(id) ON DELETE CASCADE,
+    seat_no   VARCHAR(3) NOT NULL,
     tier      VARCHAR(10) NOT NULL CHECK (tier IN ('premium', 'standard', 'economy')),
-    PRIMARY KEY (plane_id, seat_no)
+    UNIQUE (plane_id, seat_no)
 );
 
 -- Flights
@@ -61,7 +62,7 @@ CREATE TABLE passenger (
 CREATE TABLE staff (
     passenger_id  INTEGER     PRIMARY KEY REFERENCES passenger(id) ON DELETE CASCADE,
     employee_no   VARCHAR(10) NOT NULL UNIQUE,
-    employee_type VARCHAR(10) NOT NULL DEFAULT 'staff' CHECK (role IN ('staff', 'admin'))
+    employee_type VARCHAR(10) NOT NULL DEFAULT 'staff' CHECK (employee_type IN ('staff', 'admin'))
 );
 
 -- Passenger seats (bookings)
@@ -85,7 +86,7 @@ CREATE TABLE passenger_seat (
     cancelled_at     TIMESTAMPTZ,
     refund_cents     INTEGER,
     checked_in_at    TIMESTAMPTZ
-);~
+);
 
 -- Only one confirmed booking per seat on a flight
 CREATE UNIQUE INDEX one_booking_per_seat
