@@ -1,5 +1,5 @@
 -- FlightReacts Bookings — test seed data
--- All test accounts use emails ending in @flightreacts.test
+-- All test accounts use emails ending in @example.com
 -- Test login password for every seeded account: TestPass123!  (bcrypt, cost 12 — same format as the app)
 -- Re-runnable: it aborts if seed data already exists. Run cleanup_test_data.sql first to reseed.
 -- Dates are relative to the day you run it, so "upcoming" flights stay upcoming.
@@ -7,7 +7,7 @@
 begin;
 
 do $$ begin
-  if exists (select 1 from passenger where email like '%@flightreacts.test') then
+  if exists (select 1 from passenger where email like '%@example.com') then
     raise exception 'Seed data already present — run cleanup_test_data.sql first';
   end if;
 end $$;
@@ -88,28 +88,28 @@ join airport a on a.code = v.origin;
 insert into passenger (email, password_hash, full_name)
 select e, '$2b$12$qsXaF.oqkuEhkgZ9PoBu0OhgBwGX0.jPa1Mz7u1Yfsi5isBpcNBdi', n
 from (values
-  ('alice.nguyen@flightreacts.test','Alice Nguyen'),
-  ('ben.okafor@flightreacts.test','Ben Okafor'),
-  ('chloe.martin@flightreacts.test','Chloe Martin'),
-  ('daniel.rossi@flightreacts.test','Daniel Rossi'),
-  ('emma.tremblay@flightreacts.test','Emma Tremblay'),
-  ('farhan.ali@flightreacts.test','Farhan Ali'),
-  ('hana.kim@flightreacts.test','Hana Kim'),
-  ('isaac.cohen@flightreacts.test','Isaac Cohen'),
-  ('jasmine.singh@flightreacts.test','Jasmine Singh'),
-  ('kai.wilson@flightreacts.test','Kai Wilson'),
-  ('nopurchases@flightreacts.test','Nora Empty'),          -- account with zero bookings
-  ('staff.morgan@flightreacts.test','Morgan Lee'),
-  ('staff.priya@flightreacts.test','Priya Desai'),
-  ('admin.sam@flightreacts.test','Sam Admin')
+  ('alice.nguyen@example.com','Alice Nguyen'),
+  ('ben.okafor@example.com','Ben Okafor'),
+  ('chloe.martin@example.com','Chloe Martin'),
+  ('daniel.rossi@example.com','Daniel Rossi'),
+  ('emma.tremblay@example.com','Emma Tremblay'),
+  ('farhan.ali@example.com','Farhan Ali'),
+  ('hana.kim@example.com','Hana Kim'),
+  ('isaac.cohen@example.com','Isaac Cohen'),
+  ('jasmine.singh@example.com','Jasmine Singh'),
+  ('kai.wilson@example.com','Kai Wilson'),
+  ('nopurchases@example.com','Nora Empty'),          -- account with zero bookings
+  ('staff.morgan@example.com','Morgan Lee'),
+  ('staff.priya@example.com','Priya Desai'),
+  ('admin.sam@example.com','Sam Admin')
 ) v(e, n);
 
 insert into staff (passenger_id, employee_no, employee_type)
 select p.id, v.emp, v.t
 from (values
-  ('staff.morgan@flightreacts.test','EMP1001','staff'),
-  ('staff.priya@flightreacts.test','EMP1002','staff'),
-  ('admin.sam@flightreacts.test','EMP9001','admin')
+  ('staff.morgan@example.com','EMP1001','staff'),
+  ('staff.priya@example.com','EMP1002','staff'),
+  ('admin.sam@example.com','EMP9001','admin')
 ) v(e, emp, t)
 join passenger p on p.email = v.e;
 
@@ -129,28 +129,28 @@ select b.ref, p.id, f.id, s.id, b.traveler,
        case when b.kind in ('cancel','flightcx') then x.base + x.tax + 2500 + b.bags * 3500 end,
        case when b.kind = 'checkin' then f.depart_at - interval '20 hours' end
 from (values
-  ('FRA1B2','alice.nguyen@flightreacts.test','FR101','3A','Alice Nguyen',1,'checkin'),
-  ('FRA1B3','alice.nguyen@flightreacts.test','FR102','3A','Alice Nguyen',1,'checkin'),
-  ('FRB2C3','ben.okafor@flightreacts.test','FR201','12C','Ben Okafor',0,'checkin'),
-  ('FRB2C4','ben.okafor@flightreacts.test','FR201','12D','Grace Okafor',1,'checkin'),
-  ('FRN4P5','emma.tremblay@flightreacts.test','FR201','4A','Emma Tremblay',2,'checkin'),
-  ('FRC3D4','chloe.martin@flightreacts.test','FR110','1A','Chloe Martin',0,'ok'),
-  ('FRC3D5','chloe.martin@flightreacts.test','FR111','1A','Chloe Martin',0,'ok'),
-  ('FRD4E5','daniel.rossi@flightreacts.test','FR202','5A','Daniel Rossi',2,'ok'),
-  ('FRE5F6','emma.tremblay@flightreacts.test','FR301','15B','Emma Tremblay',1,'ok'),
-  ('FRE5F7','emma.tremblay@flightreacts.test','FR302','15B','Emma Tremblay',1,'ok'),
-  ('FRF6G7','farhan.ali@flightreacts.test','FR401','2C','Farhan Ali',1,'ok'),
-  ('FRM3N4','farhan.ali@flightreacts.test','FR502','22F','Farhan Ali',0,'ok'),
-  ('FRG7H8','hana.kim@flightreacts.test','FR501','20A','Hana Kim',1,'ok'),
-  ('FRG7H9','hana.kim@flightreacts.test','FR501','20B','Leo Kim',0,'ok'),
-  ('FRH8J9','isaac.cohen@flightreacts.test','FR601','3B','Isaac Cohen',2,'ok'),
-  ('FRH8K1','isaac.cohen@flightreacts.test','FR602','3B','Isaac Cohen',2,'ok'),
-  ('FRJ9K2','jasmine.singh@flightreacts.test','FR701','1A','Jasmine Singh',2,'ok'),
-  ('FRJ9K3','jasmine.singh@flightreacts.test','FR702','1A','Jasmine Singh',2,'ok'),
-  ('FRK1L2','kai.wilson@flightreacts.test','FR801','10A','Kai Wilson',1,'cancel'),
-  ('FRK1L3','kai.wilson@flightreacts.test','FR801','10A','Kai Wilson',0,'ok'),   -- same seat rebooked after cancel
-  ('FRL2M3','daniel.rossi@flightreacts.test','FR901','6A','Daniel Rossi',0,'flightcx'),
-  ('FRL2M4','alice.nguyen@flightreacts.test','FR901','6B','Alice Nguyen',1,'flightcx')
+  ('FRA1B2','alice.nguyen@example.com','FR101','3A','Alice Nguyen',1,'checkin'),
+  ('FRA1B3','alice.nguyen@example.com','FR102','3A','Alice Nguyen',1,'checkin'),
+  ('FRB2C3','ben.okafor@example.com','FR201','12C','Ben Okafor',0,'checkin'),
+  ('FRB2C4','ben.okafor@example.com','FR201','12D','Grace Okafor',1,'checkin'),
+  ('FRN4P5','emma.tremblay@example.com','FR201','4A','Emma Tremblay',2,'checkin'),
+  ('FRC3D4','chloe.martin@example.com','FR110','1A','Chloe Martin',0,'ok'),
+  ('FRC3D5','chloe.martin@example.com','FR111','1A','Chloe Martin',0,'ok'),
+  ('FRD4E5','daniel.rossi@example.com','FR202','5A','Daniel Rossi',2,'ok'),
+  ('FRE5F6','emma.tremblay@example.com','FR301','15B','Emma Tremblay',1,'ok'),
+  ('FRE5F7','emma.tremblay@example.com','FR302','15B','Emma Tremblay',1,'ok'),
+  ('FRF6G7','farhan.ali@example.com','FR401','2C','Farhan Ali',1,'ok'),
+  ('FRM3N4','farhan.ali@example.com','FR502','22F','Farhan Ali',0,'ok'),
+  ('FRG7H8','hana.kim@example.com','FR501','20A','Hana Kim',1,'ok'),
+  ('FRG7H9','hana.kim@example.com','FR501','20B','Leo Kim',0,'ok'),
+  ('FRH8J9','isaac.cohen@example.com','FR601','3B','Isaac Cohen',2,'ok'),
+  ('FRH8K1','isaac.cohen@example.com','FR602','3B','Isaac Cohen',2,'ok'),
+  ('FRJ9K2','jasmine.singh@example.com','FR701','1A','Jasmine Singh',2,'ok'),
+  ('FRJ9K3','jasmine.singh@example.com','FR702','1A','Jasmine Singh',2,'ok'),
+  ('FRK1L2','kai.wilson@example.com','FR801','10A','Kai Wilson',1,'cancel'),
+  ('FRK1L3','kai.wilson@example.com','FR801','10A','Kai Wilson',0,'ok'),   -- same seat rebooked after cancel
+  ('FRL2M3','daniel.rossi@example.com','FR901','6A','Daniel Rossi',0,'flightcx'),
+  ('FRL2M4','alice.nguyen@example.com','FR901','6B','Alice Nguyen',1,'flightcx')
 ) b(ref, email, flight_no, seat_no, traveler, bags, kind)
 join passenger p on p.email = b.email
 join flight f on f.flight_no = b.flight_no
@@ -166,7 +166,7 @@ cross join lateral (select fare.base as base, round(fare.base * 0.13)::int as ta
 insert into passenger_seat (booking_ref, passenger_id, flight_id, seat_id, traveler_name,
     base_fare_cents, taxes_cents, fees_cents, total_cents, payment_ref)
 select 'FRX' || lpad(row_number() over (order by s.id)::text, 3, '0'),
-       (select id from passenger where email = 'hana.kim@flightreacts.test'),
+       (select id from passenger where email = 'hana.kim@example.com'),
        f.id, s.id, 'Group Booking Traveler ' || row_number() over (order by s.id),
        f.economy_fare_cents, round(f.economy_fare_cents * 0.13)::int, 2500,
        f.economy_fare_cents + round(f.economy_fare_cents * 0.13)::int + 2500,

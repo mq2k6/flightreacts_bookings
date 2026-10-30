@@ -2,10 +2,10 @@
 begin;
 
 delete from passenger_seat
-where passenger_id in (select id from passenger where email like '%@flightreacts.test')
+where passenger_id in (select id from passenger where email like '%@example.com')
    or booking_ref like 'FR%' and payment_ref like 'TEST-PAY-%';
 
-delete from passenger where email like '%@flightreacts.test';   -- staff rows cascade
+delete from passenger where email like '%@example.com';   -- staff rows cascade
 
 delete from flight
 where flight_no in ('FR101','FR102','FR201','FR110','FR111','FR202','FR301','FR302','FR401','FR402',
