@@ -1,3 +1,7 @@
+import os
+from dotenv import load_dotenv
+from supabase import create_client
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,6 +14,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/flights/{flight_id}")
+def get_flight(flight_id: int):
+    return {"flight_id": flight_id}
+
 
 # your normal Python function
 def add(a, b):
