@@ -10,7 +10,7 @@ You need Node.js 20 or newer.
 
 # Run it
 \
-\
+
 ## Frontend:
 ```
 cd frontend
@@ -20,9 +20,9 @@ npm run dev
 ## Backend:
 ```
 uvcorn main:app --reload
-```\
+```
+\
 Then open the link it prints (usually http://localhost:5173).
-\ 
 # Adding screens to the Frontend from Figma (Figroot)
 
 1. Put the exported file in `src/components/`, e.g. `SearchFlights.tsx`.
