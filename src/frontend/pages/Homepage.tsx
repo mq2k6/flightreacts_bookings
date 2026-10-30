@@ -156,8 +156,8 @@ export default function HomePage() {
 
   try {
     const params = new URLSearchParams({
-      from,
-      to,
+      from: from,
+      to: to,
       departure_date: departureDate,
       max_price: maxPrice,
       departure_time: departureTime,

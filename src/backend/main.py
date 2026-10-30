@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, text
 load_dotenv()
 security = HTTPBearer()
 app = FastAPI()
-
+FLIGHTS = []
 DATABASE_URL = os.getenv("DATABASE_URL")
 JWT_SECRET = os.getenv("JWT_SECRET")
 
