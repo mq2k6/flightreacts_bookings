@@ -1,20 +1,32 @@
-# Frontend
+# Infrastructure
 
-React + TypeScript + Tailwind, built with Vite.
+Frontend: React + TypeScript + Tailwind, built with Vite.
+Backend: FastAPI + Python
 
-## Run it
+# Install
+
+Run `pip install -r requirements.txt`.
+
+# Run it
 
 You need Node.js 20 or newer.
+
+## Frontend:
 
 ```
 cd frontend
 npm install
 npm run dev
 ```
+## Backend:
+
+```
+uvcorn main:app --reload
+```
 
 Then open the link it prints (usually http://localhost:5173).
 
-## Adding screens from Figma (Figroot)
+# Adding screens to the Frontend from Figma (Figroot)
 
 1. Put the exported file in `src/components/`, e.g. `SearchFlights.tsx`.
 2. Rename the component if its name starts with a number (`1LogInSignUp` → `LogInSignUp`).
