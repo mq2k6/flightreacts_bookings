@@ -1,7 +1,6 @@
 import bcrypt
 import jwt
 import os
-
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, HTTPException
