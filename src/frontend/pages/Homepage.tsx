@@ -16,20 +16,42 @@ export default function HomePage() {
   const [userId, setUserId] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  //useEffect(() => {//ensures the user is logged in to access homepage
- // async function getUser() {
-  //  const { data: { user }, error } = await supabase.auth.getUser();
+  useEffect(() => {
+    async function getUser() {
+      const token = localStorage.getItem("token");
 
-  //  if (error || !user) {
-  //    navigate("/login");
-   //   return;
-  //  }
+      if (!token) {
+        navigate("/login");
+        return;
+      }
 
-//    setUserId(user.id);
-//  }
+      try {
+        const response = await fetch("http://localhost:8000/me", {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
 
- // getUser();
- // }, [navigate]);
+        if (!response.ok) {
+          localStorage.removeItem("token");
+          localStorage.removeItem("passenger");
+          navigate("/login");
+          return;
+        }
+
+        const passenger = await response.json();
+
+        setUserId(passenger.id);
+
+      } catch (error) {
+        console.error("Error retrieving passenger:", error);
+        navigate("/login");
+      }
+    }
+
+    getUser();
+  }, [navigate]);
 
 
   function handleSearch(e: FormEvent<HTMLFormElement>) {
@@ -48,6 +70,14 @@ export default function HomePage() {
     });
   }
 
+  function handleLogout() {
+  localStorage.removeItem("token");
+  localStorage.removeItem("passenger");
+
+  setUserId(null); // If you're tracking userId in state
+
+  navigate("/login");
+}
 
   function handleViewDetails() {
     window.location.href = "/flight-details";
@@ -76,7 +106,7 @@ export default function HomePage() {
 
             <button
             type="button"
-            onClick={() => navigate("/login")}
+            onClick={() => handleLogout()}
             className="hover:text-[#5C339E]"
             >
             Log out
