@@ -3,6 +3,10 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import HomePage from "./pages/Homepage";
 import LogIn from "./pages/LogIn";
 import SignUp from "./pages/SignUp";
+import Account from "./pages/Account"
+import Confirm_Booking from "./pages/Confirm_Booking"
+import Flight_Details from "./pages/Flight_Details"
+
 import { useState } from "react";
 
 export default function App() {
@@ -13,6 +17,9 @@ export default function App() {
         <Route path="/login" element={<LogIn />} />
         <Route path="/signup" element={<SignUp />} />
         <Route path="/home" element={<HomePage />} />
+        <Route path="/account:id" element={<Account />} />
+        <Route path="/booking-site:id" element={<Confirm_Booking />} />
+        <Route path="/flight-details:id" element={<Flight_Details />} />
 
         {/* Redirect unknown URLs to login */}
         <Route path="*" element={<Navigate to="/login" replace />} />

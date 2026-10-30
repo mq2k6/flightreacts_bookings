@@ -55,6 +55,8 @@ class LoginRequest(BaseModel):
     password: str
 
 
+
+
 FLIGHT_SQL = """
 SELECT f.id, f.flight_no,
        o.city AS from_city, f.origin      AS from_code,
@@ -230,3 +232,58 @@ def me(passenger_id: int = Depends(get_current_user_id)):
     if not result:
         raise HTTPException(status_code=404, detail="Passenger not found")
     return {"id": result.id, "email": result.email, "full_name": result.full_name}
+
+FLIGHT_DETAIL_SQL = """
+SELECT f.id, f.flight_no, f.status, f.depart_at, f.arrive_at,
+       o.city AS from_city, f.origin      AS from_code, o.timezone AS from_tz,
+       d.city AS to_city,   f.destination AS to_code,   d.timezone AS to_tz,
+       f.premium_fare_cents, f.standard_fare_cents, f.economy_fare_cents
+FROM flight f
+JOIN airport o ON o.code = f.origin
+JOIN airport d ON d.code = f.destination
+WHERE f.id = :flight_id
+"""
+
+FLIGHT_SEATS_SQL = """
+SELECT s.id, s.seat_no, s.tier, (ps.id IS NOT NULL) AS taken
+FROM flight f
+JOIN seat s ON s.plane_id = f.plane_id
+LEFT JOIN passenger_seat ps
+       ON ps.flight_id = f.id AND ps.seat_id = s.id AND ps.status = 'confirmed'
+WHERE f.id = :flight_id
+"""
+
+
+@app.get("/flights/{flight_id}")
+def flight_details(flight_id: int, user_id: int = Depends(get_current_user_id)):
+    with engine.connect() as conn:
+        f = conn.execute(text(FLIGHT_DETAIL_SQL), {"flight_id": flight_id}).mappings().first()
+        if not f:
+            raise HTTPException(status_code=404, detail="Flight not found")
+        seats = conn.execute(text(FLIGHT_SEATS_SQL), {"flight_id": flight_id}).mappings().all()
+
+    fares = {
+        "premium": f["premium_fare_cents"],
+        "standard": f["standard_fare_cents"],
+        "economy": f["economy_fare_cents"],
+    }
+    return {
+        "id": f["id"],
+        "flight_no": f["flight_no"],
+        "status": f["status"],
+        "from": f["from_city"], "from_code": f["from_code"], "from_tz": f["from_tz"],
+        "to": f["to_city"],     "to_code": f["to_code"],     "to_tz": f["to_tz"],
+        "depart_at": f["depart_at"],
+        "arrive_at": f["arrive_at"],
+        "fares_cents": fares,
+        "seats": [
+            {
+                "id": s["id"],
+                "seat_no": s["seat_no"],
+                "tier": s["tier"],
+                "fare_cents": fares[s["tier"]],
+                "taken": s["taken"],
+            }
+            for s in seats
+        ],
+    }
