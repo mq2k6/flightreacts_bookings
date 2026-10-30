@@ -1,7 +1,5 @@
-
 import { useState, type FormEvent } from "react";
-import { useNavigate, Link } from "react-router-dom";
-import { supabase } from "../lib/supabase";
+import { useNavigate } from "react-router-dom";
 
 export default function LogIn() {
   const [email, setEmail] = useState("");
@@ -14,22 +12,44 @@ export default function LogIn() {
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    setInvalidLogin(false);
     setLoading(true);
+    setInvalidLogin(false);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const response = await fetch("http://localhost:8000/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: email,
+          password: password,
+        }),
+      });
 
-    setLoading(false);
+      const data = await response.json();
 
-    if (error) {
+      if (!response.ok) {
+        throw new Error(data.detail || "Login failed");
+      }
+
+      // Save authentication token
+      localStorage.setItem("token", data.token);
+      
+      // Save passenger information
+      localStorage.setItem(
+        "passenger",
+        JSON.stringify(data.passenger)
+      );
+      navigate("/home");
+
+    } catch (error) {
+      console.error("Login error:", error);
       setInvalidLogin(true);
-      return;
-    }
 
-    navigate("/home");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -113,21 +133,14 @@ export default function LogIn() {
           </p>
         </button>
 
-    {/* Sign Up Link */}
- 
-      <a
-        href="/signup"
-        className="text-[#804DD9] font-inter text-[11px] font-bold w-fit hover:underline"
-      >
+        {/* Sign Up Link */}
         <button
-            type="button"
-            onClick={() => navigate("/signup")}
-            className="hover:text-[#5C339E]"
-            >
-                New here? Create an account
-
-            </button>
-      </a>
+          type="button"
+          onClick={() => navigate("/signup")}
+          className="text-[#804DD9] font-inter text-[11px] font-bold w-fit hover:text-[#5C339E] hover:underline"
+        >
+          New here? Create an account
+        </button>
 
         {/* Additional Information */}
         <p className="text-[#737373] font-inter text-[10px] w-full max-w-[560px]">

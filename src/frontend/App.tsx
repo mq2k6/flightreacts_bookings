@@ -3,8 +3,10 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import HomePage from "./pages/Homepage";
 import LogIn from "./pages/LogIn";
 import SignUp from "./pages/SignUp";
+import { useState } from "react";
 
 export default function App() {
+  const [user, setUser]= useState(null)
   return (
     <BrowserRouter>
       <Routes>

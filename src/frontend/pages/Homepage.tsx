@@ -1,6 +1,7 @@
 
-import { useState, type FormEvent } from "react";
+import { useState, useEffect, type FormEvent } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import { supabase } from "../supabase";
 export default function HomePage() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -9,7 +10,28 @@ export default function HomePage() {
   const [departureTime, setDepartureTime] = useState("");
   const [directOnly, setDirectOnly] = useState(true);
   const [seatTier, setSeatTier] = useState("Any");
+  const [searchSubmitted, setsearchSubmitted] = useState(false);
+  const [searchResults, setSearchResults] = useState([]);
+  const [upcoming, setUpcoming] = useState([]);
+  const [userId, setUserId] = useState<string | null>(null);
   const navigate = useNavigate();
+
+  //useEffect(() => {//ensures the user is logged in to access homepage
+ // async function getUser() {
+  //  const { data: { user }, error } = await supabase.auth.getUser();
+
+  //  if (error || !user) {
+  //    navigate("/login");
+   //   return;
+  //  }
+
+//    setUserId(user.id);
+//  }
+
+ // getUser();
+ // }, [navigate]);
+
+
   function handleSearch(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
    
@@ -188,37 +210,105 @@ export default function HomePage() {
 
         </form>
 
-        {/* Upcoming Flight */}
-        <h2 className="text-[#2E2E2E] font-inter text-xs font-bold">
-          Your next flight
-        </h2>
+       {/* Upcoming Flights */}
+        {/*!searchSubmitted && (
+          <div className="flex flex-col items-start gap-2.5 w-full">
 
-        <div className="flex flex-wrap py-2 px-2.5 justify-between items-center gap-3 rounded-md border border-[#D1C7EB] bg-white w-full">
+            <h2 className="text-[#2E2E2E] font-inter text-xs font-bold">
+              Your upcoming flights
+            </h2>
 
-          <div className="flex flex-col items-start gap-[3px] min-w-0">
-            <p className="text-[#2E2E2E] font-inter text-xs font-bold">
-              FR204 · Toronto (YYZ) → Montréal (YUL)
+            {upcoming.length > 0 ? (
+              upcoming.map((flight) => (
+                <div
+                  key={flight.id}
+                  className="flex flex-wrap py-2 px-2.5 justify-between items-center gap-3 rounded-md border border-[#D1C7EB] bg-white w-full"
+                >
+
+                  <div className="flex flex-col items-start gap-[3px] min-w-0">
+                    <p className="text-[#2E2E2E] font-inter text-xs font-bold">
+                      {flight.flight_number} · {flight.from} → {flight.to}
+                    </p>
+
+                    <p className="text-[#737373] font-inter text-[10px]">
+                      {flight.departure_date} · {flight.departure_time} → {flight.arrival_time} · Seat {flight.seat_number} ({flight.seat_tier})
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleViewDetails(flight.id)}
+                    className="cursor-pointer flex py-[7px] px-3.5 justify-center items-center rounded border border-[#D1C7EB] bg-white text-[#2E2E2E] font-inter text-[11px] font-bold hover:bg-[#F2EDFC]"
+                  >
+                    View details
+                  </button>
+
+                </div>
+              ))
+            ) : (
+              <p className="text-[#737373] font-inter text-[10px]">
+                You don't have any upcoming flights.
+              </p>
+            )}
+
+            <p className="text-[#737373] font-inter text-[10px] w-full max-w-[560px]">
+              All your reservations can be viewed in My Account.
             </p>
 
-            <p className="text-[#737373] font-inter text-[10px]">
-              Thu, Oct 16, 2026 · 07:30 → 08:45 · Seat 3A (Premium)
-            </p>
           </div>
+        )}
 
-          <button
-            type="button"
-            onClick={handleViewDetails}
-            className="cursor-pointer flex py-[7px] px-3.5 justify-center items-center rounded border border-[#D1C7EB] bg-white text-[#2E2E2E] font-inter text-[11px] font-bold hover:bg-[#F2EDFC]"
-          >
-            View details
-          </button>
+        {/*Search Results */}
+        {/*searchSubmitted && (
+          <div className="flex flex-col items-start gap-2.5 w-full">
 
-        </div>
+            <h2 className="text-[#2E2E2E] font-inter text-xs font-bold">
+              Available flights
+            </h2>
 
-        <p className="text-[#737373] font-inter text-[10px] w-full max-w-[560px]">
-          Only the closest upcoming flight is shown here. All trips are in My Account.
-        </p>
+            <button
+              type="button"
+              onClick={() => setsearchSubmitted(false)}
+              className="text-[#804DD9] font-inter text-[10px] font-bold hover:underline"
+            >
+              ← Back to upcoming flights
+            </button>
 
+            {searchResults.length > 0 ? (
+              searchResults.map((flight) => (
+                <div
+                  key={flight.id}
+                  className="flex flex-wrap py-2 px-2.5 justify-between items-center gap-3 rounded-md border border-[#D1C7EB] bg-white w-full"
+                >
+
+                  <div className="flex flex-col items-start gap-[3px] min-w-0">
+                    <p className="text-[#2E2E2E] font-inter text-xs font-bold">
+                      {flight.flight_number} · {flight.from} → {flight.to}
+                    </p>
+
+                    <p className="text-[#737373] font-inter text-[10px]">
+                      {flight.departure_date} · {flight.departure_time} → {flight.arrival_time} · ${flight.price}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleBookFlight(flight.id)}
+                    className="cursor-pointer flex py-[7px] px-3.5 justify-center items-center rounded border border-[#D1C7EB] bg-white text-[#2E2E2E] font-inter text-[11px] font-bold hover:bg-[#F2EDFC]"
+                  >
+                    Book flight
+                  </button>
+
+                </div>
+              ))
+            ) : (
+              <p className="text-[#737373] font-inter text-[10px]">
+                No flights found matching your search.
+              </p>
+            )}
+
+          </div>
+        )*/}
       </div>
     </div>
   );
