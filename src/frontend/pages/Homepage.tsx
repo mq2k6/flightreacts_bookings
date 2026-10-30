@@ -1,7 +1,58 @@
 
 import { useState, useEffect, type FormEvent } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { supabase } from "../supabase";
+
+interface Flight {
+  id: number;
+  flight_number: string;
+  from: string;
+  to: string;
+  departure_date: string;
+  departure_time: string;
+  arrival_time: string;
+  price?: number;
+  seat_number?: string;
+  seat_tier?: string;
+}
+
+interface FlightCardProps {
+  flight: Flight;
+  type: "upcoming" | "search";
+  onAction: (id: number) => void;
+}
+
+function FlightCard({ flight, type, onAction }: FlightCardProps) {
+  return (
+    <div className="flex flex-wrap py-2 px-2.5 justify-between items-center gap-3 rounded-md border border-[#D1C7EB] bg-white w-full">
+
+      <div className="flex flex-col items-start gap-[3px] min-w-0">
+        <p className="text-[#2E2E2E] font-inter text-xs font-bold">
+          {flight.flight_number} · {flight.from} → {flight.to}
+        </p>
+
+        <p className="text-[#737373] font-inter text-[10px]">
+          {flight.departure_date} · {flight.departure_time} → {flight.arrival_time}
+          {type === "upcoming" && flight.seat_number
+            ? ` · Seat ${flight.seat_number} (${flight.seat_tier ?? "N/A"})`
+            : ""}
+          {type === "search" && flight.price !== undefined
+            ? ` · $${flight.price}`
+            : ""}
+        </p>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => onAction(flight.id)}
+        className="cursor-pointer flex py-[7px] px-3.5 justify-center items-center rounded border border-[#D1C7EB] bg-white text-[#2E2E2E] font-inter text-[11px] font-bold hover:bg-[#F2EDFC]"
+      >
+        {type === "upcoming" ? "View details" : "Book flight"}
+      </button>
+
+    </div>
+  );
+}
+
 export default function HomePage() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -10,65 +61,133 @@ export default function HomePage() {
   const [departureTime, setDepartureTime] = useState("");
   const [directOnly, setDirectOnly] = useState(true);
   const [seatTier, setSeatTier] = useState("Any");
-  const [searchSubmitted, setsearchSubmitted] = useState(false);
-  const [searchResults, setSearchResults] = useState([]);
-  const [upcoming, setUpcoming] = useState([]);
+
   const [userId, setUserId] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  useEffect(() => {
-    async function getUser() {
-      const token = localStorage.getItem("token");
+  const [searchSubmitted, setsearchSubmitted] = useState(false);
+  const [searchResults, setSearchResults] = useState<Flight[]>([]);
+  const [upcoming, setUpcoming] = useState<Flight[]>([]);
 
-      if (!token) {
+  const [loadingUpcoming, setLoadingUpcoming] = useState(true);
+  const [loadingSearch, setLoadingSearch] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+  async function getUser() {
+    const token = localStorage.getItem("token");
+
+    if (!token) {
+      navigate("/login");
+      return;
+    }
+
+    // First, verify the user is authenticated
+    try {
+      const response = await fetch("http://localhost:8000/me", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        localStorage.removeItem("token");
+        localStorage.removeItem("passenger");
         navigate("/login");
         return;
       }
 
-      try {
-        const response = await fetch("http://localhost:8000/me", {
-          method: "GET",
+      const passenger = await response.json();
+      setUserId(passenger.id);
+
+    } catch (error) {
+      console.error("Error verifying user:", error);
+      navigate("/login");
+      return;
+    }
+
+    // Then, independently try to load upcoming flights
+    try {
+      const flightsResponse = await fetch(
+        "http://localhost:8000/flights/upcoming",
+        {
           headers: {
             Authorization: `Bearer ${token}`,
           },
-        });
-
-        if (!response.ok) {
-          localStorage.removeItem("token");
-          localStorage.removeItem("passenger");
-          navigate("/login");
-          return;
         }
+      );
 
-        const passenger = await response.json();
-
-        setUserId(passenger.id);
-
-      } catch (error) {
-        console.error("Error retrieving passenger:", error);
-        navigate("/login");
+      if (!flightsResponse.ok) {
+        console.log("Upcoming flights endpoint unavailable.");
+        setUpcoming([]);
+        return;
       }
+
+      const flightsData = await flightsResponse.json();
+      setUpcoming(flightsData);
+
+    } catch (error) {
+      console.error("Error loading upcoming flights:", error);
+      setUpcoming([]);
+    } finally {
+      setLoadingUpcoming(false);
     }
+  }
 
-    getUser();
-  }, [navigate]);
+  getUser();
+}, [navigate]);
 
 
-  function handleSearch(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-   
+  async function handleSearch(e: FormEvent<HTMLFormElement>) {
+  e.preventDefault();
 
-    // TODO: Connect to flight search API
-    console.log("Searching flights:", {
+  const token = localStorage.getItem("token");
+
+  if (!token) {
+    navigate("/login");
+    return;
+  }
+
+  setsearchSubmitted(true);
+  setLoadingSearch(true);
+  setError("");
+  setSearchResults([]);
+
+  try {
+    const params = new URLSearchParams({
       from,
       to,
-      departureDate,
-      maxPrice,
-      departureTime,
-      directOnly,
-      seatTier,
+      departure_date: departureDate,
+      max_price: maxPrice,
+      departure_time: departureTime,
+      direct_only: String(directOnly),
+      seat_tier: seatTier,
     });
+
+    const response = await fetch(
+      `http://localhost:8000/flights/search?${params.toString()}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error("Failed to search flights");
+    }
+
+    const data = await response.json();
+    setSearchResults(data);
+
+  } catch (error) {
+    console.error("Error searching flights:", error);
+    setError("Unable to search flights. Please try again.");
+  } finally {
+    setLoadingSearch(false);
   }
+}
 
   function handleLogout() {
   localStorage.removeItem("token");
@@ -79,9 +198,13 @@ export default function HomePage() {
   navigate("/login");
 }
 
-  function handleViewDetails() {
-    window.location.href = "/flight-details";
-  }
+function handleViewDetails(id: number) {
+  navigate(`/flight-details/${id}`);
+}
+
+function handleBookFlight(id: number) {
+  navigate(`/booking/${id}`);
+}
 
   return (
     <div className="flex flex-col items-start rounded-lg border border-[#D1C7EB] bg-white min-h-screen w-full overflow-hidden">
@@ -241,39 +364,25 @@ export default function HomePage() {
         </form>
 
        {/* Upcoming Flights */}
-        {/*!searchSubmitted && (
+        {!searchSubmitted && (
           <div className="flex flex-col items-start gap-2.5 w-full">
 
             <h2 className="text-[#2E2E2E] font-inter text-xs font-bold">
               Your upcoming flights
             </h2>
 
-            {upcoming.length > 0 ? (
+            {loadingUpcoming ? (
+              <p className="text-[#737373] font-inter text-[10px]">
+                Loading your upcoming flights...
+              </p>
+            ) : upcoming.length > 0 ? (
               upcoming.map((flight) => (
-                <div
+                <FlightCard
                   key={flight.id}
-                  className="flex flex-wrap py-2 px-2.5 justify-between items-center gap-3 rounded-md border border-[#D1C7EB] bg-white w-full"
-                >
-
-                  <div className="flex flex-col items-start gap-[3px] min-w-0">
-                    <p className="text-[#2E2E2E] font-inter text-xs font-bold">
-                      {flight.flight_number} · {flight.from} → {flight.to}
-                    </p>
-
-                    <p className="text-[#737373] font-inter text-[10px]">
-                      {flight.departure_date} · {flight.departure_time} → {flight.arrival_time} · Seat {flight.seat_number} ({flight.seat_tier})
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => handleViewDetails(flight.id)}
-                    className="cursor-pointer flex py-[7px] px-3.5 justify-center items-center rounded border border-[#D1C7EB] bg-white text-[#2E2E2E] font-inter text-[11px] font-bold hover:bg-[#F2EDFC]"
-                  >
-                    View details
-                  </button>
-
-                </div>
+                  flight={flight}
+                  type="upcoming"
+                  onAction={handleViewDetails}
+                />
               ))
             ) : (
               <p className="text-[#737373] font-inter text-[10px]">
@@ -288,8 +397,8 @@ export default function HomePage() {
           </div>
         )}
 
-        {/*Search Results */}
-        {/*searchSubmitted && (
+        {/* Search Results */}
+        {searchSubmitted && (
           <div className="flex flex-col items-start gap-2.5 w-full">
 
             <h2 className="text-[#2E2E2E] font-inter text-xs font-bold">
@@ -304,32 +413,22 @@ export default function HomePage() {
               ← Back to upcoming flights
             </button>
 
-            {searchResults.length > 0 ? (
+            {loadingSearch ? (
+              <p className="text-[#737373] font-inter text-[10px]">
+                Searching for flights...
+              </p>
+            ) : error ? (
+              <p className="text-[#737373] font-inter text-[10px]">
+                {error}
+              </p>
+            ) : searchResults.length > 0 ? (
               searchResults.map((flight) => (
-                <div
+                <FlightCard
                   key={flight.id}
-                  className="flex flex-wrap py-2 px-2.5 justify-between items-center gap-3 rounded-md border border-[#D1C7EB] bg-white w-full"
-                >
-
-                  <div className="flex flex-col items-start gap-[3px] min-w-0">
-                    <p className="text-[#2E2E2E] font-inter text-xs font-bold">
-                      {flight.flight_number} · {flight.from} → {flight.to}
-                    </p>
-
-                    <p className="text-[#737373] font-inter text-[10px]">
-                      {flight.departure_date} · {flight.departure_time} → {flight.arrival_time} · ${flight.price}
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => handleBookFlight(flight.id)}
-                    className="cursor-pointer flex py-[7px] px-3.5 justify-center items-center rounded border border-[#D1C7EB] bg-white text-[#2E2E2E] font-inter text-[11px] font-bold hover:bg-[#F2EDFC]"
-                  >
-                    Book flight
-                  </button>
-
-                </div>
+                  flight={flight}
+                  type="search"
+                  onAction={handleBookFlight}
+                />
               ))
             ) : (
               <p className="text-[#737373] font-inter text-[10px]">
@@ -338,7 +437,7 @@ export default function HomePage() {
             )}
 
           </div>
-        )*/}
+        )}
       </div>
     </div>
   );
