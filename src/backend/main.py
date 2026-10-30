@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated
 
 import bcrypt
@@ -29,6 +29,18 @@ engine = create_engine(DATABASE_URL)
 
 JWT_ALGORITHM = "HS256"
 
+
+def get_current_user_id(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> int:
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return int(payload["passenger_id"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except (jwt.InvalidTokenError, KeyError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -43,32 +55,119 @@ class LoginRequest(BaseModel):
     password: str
 
 
-@app.get("/flights/search")
-def search_flights(
-    from_city: Annotated[str, Query(alias="from")],   # URL uses ?from=
-    to: str,
-    departure_date: str | None = None,
-    seat_tier: str | None = None,
-):
-    results = [
-        f for f in FLIGHTS
-        if f["from"].lower() == from_city.lower() and f["to"].lower() == to.lower()
+FLIGHT_SQL = """
+SELECT f.id, f.flight_no,
+       o.city AS from_city, f.origin      AS from_code,
+       d.city AS to_city,   f.destination AS to_code,
+       f.depart_at, f.arrive_at,
+       f.premium_fare_cents, f.standard_fare_cents, f.economy_fare_cents,
+       COUNT(*) FILTER (WHERE s.tier = 'premium'  AND ps.id IS NULL) AS premium_left,
+       COUNT(*) FILTER (WHERE s.tier = 'standard' AND ps.id IS NULL) AS standard_left,
+       COUNT(*) FILTER (WHERE s.tier = 'economy'  AND ps.id IS NULL) AS economy_left
+FROM flight f
+JOIN airport o ON o.code = f.origin
+JOIN airport d ON d.code = f.destination
+JOIN seat s    ON s.plane_id = f.plane_id
+LEFT JOIN passenger_seat ps
+       ON ps.flight_id = f.id AND ps.seat_id = s.id AND ps.status = 'confirmed'
+WHERE f.status = 'scheduled' AND f.depart_at >= now()
+  {extra}
+GROUP BY f.id, o.city, d.city
+ORDER BY f.depart_at
+LIMIT :limit
+"""
+
+
+def query_flights(extra: str = "", **params):
+    params.setdefault("limit", 100)
+    with engine.connect() as conn:
+        rows = conn.execute(text(FLIGHT_SQL.format(extra=extra)), params).mappings().all()
+    return [
+        {
+            "id": r["id"],
+            "flight_no": r["flight_no"],
+            "from": r["from_city"], "from_code": r["from_code"],
+            "to": r["to_city"],     "to_code": r["to_code"],
+            "depart_at": r["depart_at"],
+            "arrive_at": r["arrive_at"],
+            "fares_cents": {
+                "premium": r["premium_fare_cents"],
+                "standard": r["standard_fare_cents"],
+                "economy": r["economy_fare_cents"],
+            },
+            "seats_available": {
+                "premium": r["premium_left"],
+                "standard": r["standard_left"],
+                "economy": r["economy_left"],
+            },
+        }
+        for r in rows
     ]
-    if departure_date:
-        results = [f for f in results if f["departure_date"] == departure_date]
-    if seat_tier:
-        results = [f for f in results if f["seat_tier"].lower() == seat_tier.lower()]
-    return results
+
+
+UPCOMING_SQL = """
+SELECT ps.id AS booking_id, ps.booking_ref, ps.traveler_name,
+       ps.total_cents, ps.checked_bags, ps.checked_in_at,
+       s.seat_no, s.tier,
+       f.id AS flight_id, f.flight_no, f.status AS flight_status,
+       f.depart_at, f.arrive_at,
+       o.city AS from_city, f.origin      AS from_code,
+       d.city AS to_city,   f.destination AS to_code
+FROM passenger_seat ps
+JOIN flight f   ON f.id = ps.flight_id
+JOIN seat s     ON s.id = ps.seat_id
+JOIN airport o  ON o.code = f.origin
+JOIN airport d  ON d.code = f.destination
+WHERE ps.passenger_id = :user_id
+  AND ps.status = 'confirmed'
+  AND f.depart_at >= now()
+ORDER BY f.depart_at
+LIMIT :limit
+"""
+
 
 @app.get("/flights/upcoming")
-def upcoming_flights(limit: int = 10):
-    now = datetime.now()
-    upcoming = [
-        f for f in FLIGHTS
-        if datetime.fromisoformat(f"{f['departure_date']}T{f['departure_time']}") >= now
+def upcoming_flights(user_id: int = Depends(get_current_user_id), limit: int = 10):
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(UPCOMING_SQL), {"user_id": user_id, "limit": limit}
+        ).mappings().all()
+    return [
+        {
+            "booking_id": r["booking_id"],
+            "booking_ref": r["booking_ref"],
+            "traveler_name": r["traveler_name"],
+            "seat_no": r["seat_no"],
+            "tier": r["tier"],
+            "total_cents": r["total_cents"],
+            "checked_bags": r["checked_bags"],
+            "checked_in": r["checked_in_at"] is not None,
+            "flight_id": r["flight_id"],
+            "flight_no": r["flight_no"],
+            "flight_status": r["flight_status"],
+            "from": r["from_city"], "from_code": r["from_code"],
+            "to": r["to_city"],     "to_code": r["to_code"],
+            "depart_at": r["depart_at"],
+            "arrive_at": r["arrive_at"],
+        }
+        for r in rows
     ]
-    upcoming.sort(key=lambda f: (f["departure_date"], f["departure_time"]))
-    return upcoming[:limit]
+
+
+@app.get("/flights/search")
+def search_flights(
+    from_code: Annotated[str, Query(alias="from")],
+    to: str,
+    departure_date: date | None = None,
+):
+    return query_flights(
+        extra="""AND f.origin = :origin AND f.destination = :dest
+                 AND (CAST(:day AS date) IS NULL
+                      OR (f.depart_at AT TIME ZONE o.timezone)::date = CAST(:day AS date))""",
+        origin=from_code.upper(),
+        dest=to.upper(),
+        day=departure_date,
+    )
 
 @app.post("/login")
 def login(request: LoginRequest):
@@ -122,41 +221,12 @@ def login(request: LoginRequest):
     }
 
 @app.get("/me")
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-):
-    token = credentials.credentials
-
-    try:
-        payload = jwt.decode(
-            token,
-            JWT_SECRET,
-            algorithms=[JWT_ALGORITHM]
-        )
-
-        passenger_id = payload["passenger_id"]
-
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
+def me(passenger_id: int = Depends(get_current_user_id)):
     with engine.connect() as connection:
         result = connection.execute(
-            text("""
-                SELECT id, email, full_name
-                FROM passenger
-                WHERE id = :passenger_id
-            """),
-            {"passenger_id": passenger_id}
+            text("SELECT id, email, full_name FROM passenger WHERE id = :id"),
+            {"id": passenger_id},
         ).fetchone()
-
     if not result:
         raise HTTPException(status_code=404, detail="Passenger not found")
-
-    return {
-        "id": result.id,
-        "email": result.email,
-        "full_name": result.full_name
-    }
+    return {"id": result.id, "email": result.email, "full_name": result.full_name}
