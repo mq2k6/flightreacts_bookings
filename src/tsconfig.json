@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "isolatedModules": true
   },
-  "include": ["src", "src/pages"]
+  "include": ["frontend", "frontend/pages", "vite.config.ts"]
 }
