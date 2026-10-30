@@ -9,8 +9,6 @@ Run `pip install -r requirements.txt`.\
 You need Node.js 20 or newer.
 
 # Run it
-\
-
 ## Frontend:
 ```
 cd frontend
