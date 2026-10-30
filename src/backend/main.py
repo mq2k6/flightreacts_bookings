@@ -55,8 +55,6 @@ class LoginRequest(BaseModel):
     password: str
 
 
-
-
 FLIGHT_SQL = """
 SELECT f.id, f.flight_no,
        o.city AS from_city, f.origin      AS from_code,
@@ -173,6 +171,68 @@ def search_flights(
         day=departure_date,
         flex=flex_days,
     )
+
+
+FLIGHT_DETAIL_SQL = """
+SELECT f.id, f.flight_no, f.status, f.depart_at, f.arrive_at,
+       f.premium_fare_cents, f.standard_fare_cents, f.economy_fare_cents,
+       o.code AS from_code, o.city AS from_city, o.name AS from_airport, o.timezone AS from_tz,
+       d.code AS to_code,   d.city AS to_city,   d.name AS to_airport,   d.timezone AS to_tz,
+       p.model AS plane_model, p.total_seats
+FROM flight f
+JOIN airport o ON o.code = f.origin
+JOIN airport d ON d.code = f.destination
+JOIN plane p   ON p.id = f.plane_id
+WHERE f.id = :flight_id
+"""
+
+FLIGHT_SEATS_SQL = """
+SELECT s.id AS seat_id, s.seat_no, s.tier, (ps.id IS NULL) AS available
+FROM flight f
+JOIN seat s ON s.plane_id = f.plane_id
+LEFT JOIN passenger_seat ps
+       ON ps.flight_id = f.id AND ps.seat_id = s.id AND ps.status = 'confirmed'
+WHERE f.id = :flight_id
+ORDER BY length(s.seat_no), s.seat_no
+"""
+
+
+@app.get("/flights/{flight_id}")
+def get_flight(flight_id: int):
+    with engine.connect() as conn:
+        f = conn.execute(text(FLIGHT_DETAIL_SQL), {"flight_id": flight_id}).mappings().first()
+        if not f:
+            raise HTTPException(status_code=404, detail="Flight not found")
+        seats = conn.execute(text(FLIGHT_SEATS_SQL), {"flight_id": flight_id}).mappings().all()
+
+    available = {"premium": 0, "standard": 0, "economy": 0}
+    for s in seats:
+        if s["available"]:
+            available[s["tier"]] += 1
+
+    return {
+        "id": f["id"],
+        "flight_no": f["flight_no"],
+        "status": f["status"],
+        "from": f["from_city"], "from_code": f["from_code"],
+        "from_airport": f["from_airport"], "from_timezone": f["from_tz"],
+        "to": f["to_city"], "to_code": f["to_code"],
+        "to_airport": f["to_airport"], "to_timezone": f["to_tz"],
+        "depart_at": f["depart_at"],
+        "arrive_at": f["arrive_at"],
+        "duration_minutes": int((f["arrive_at"] - f["depart_at"]).total_seconds() // 60),
+        "plane": {"model": f["plane_model"], "total_seats": f["total_seats"]},
+        "fares_cents": {
+            "premium": f["premium_fare_cents"],
+            "standard": f["standard_fare_cents"],
+            "economy": f["economy_fare_cents"],
+        },
+        "seats_available": available,
+        "seats": [
+            {"id": s["seat_id"], "seat_no": s["seat_no"], "tier": s["tier"], "available": s["available"]}
+            for s in seats
+        ],
+    }
 
 @app.post("/login")
 def login(request: LoginRequest):
