@@ -49,6 +49,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+optional_security = HTTPBearer(auto_error=False)   # no token = no error
+
+
+def get_optional_user_id(
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_security),
+) -> int | None:
+    if credentials is None:
+        return None
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return int(payload["passenger_id"])
+    except (jwt.InvalidTokenError, KeyError, ValueError):
+        return None                                  # bad/expired token = treated as logged out
+
 # Login request structure
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -63,7 +77,10 @@ SELECT f.id, f.flight_no,
        f.premium_fare_cents, f.standard_fare_cents, f.economy_fare_cents,
        COUNT(*) FILTER (WHERE s.tier = 'premium'  AND ps.id IS NULL) AS premium_left,
        COUNT(*) FILTER (WHERE s.tier = 'standard' AND ps.id IS NULL) AS standard_left,
-       COUNT(*) FILTER (WHERE s.tier = 'economy'  AND ps.id IS NULL) AS economy_left
+       COUNT(*) FILTER (WHERE s.tier = 'economy'  AND ps.id IS NULL) AS economy_left,
+              EXISTS (SELECT 1 FROM passenger_seat b
+               WHERE b.flight_id = f.id AND b.passenger_id = :user_id
+                 AND b.status = 'confirmed') AS is_booked
 FROM flight f
 JOIN airport o ON o.code = f.origin
 JOIN airport d ON d.code = f.destination
@@ -196,15 +213,30 @@ WHERE f.id = :flight_id
 ORDER BY length(s.seat_no), s.seat_no
 """
 
+MY_BOOKINGS_SQL = """
+SELECT ps.id AS booking_id, ps.booking_ref, ps.traveler_name, ps.seat_id,
+       s.seat_no, s.tier, ps.total_cents, ps.checked_bags, ps.checked_in_at
+FROM passenger_seat ps
+JOIN seat s ON s.id = ps.seat_id
+WHERE ps.flight_id = :flight_id AND ps.passenger_id = :user_id AND ps.status = 'confirmed'
+ORDER BY ps.id
+"""
+
 
 @app.get("/flights/{flight_id}")
-def get_flight(flight_id: int):
+def get_flight(flight_id: int, user_id: int | None = Depends(get_optional_user_id)):
     with engine.connect() as conn:
         f = conn.execute(text(FLIGHT_DETAIL_SQL), {"flight_id": flight_id}).mappings().first()
         if not f:
             raise HTTPException(status_code=404, detail="Flight not found")
         seats = conn.execute(text(FLIGHT_SEATS_SQL), {"flight_id": flight_id}).mappings().all()
+        my_bookings = []
+        if user_id is not None:
+            my_bookings = conn.execute(
+                text(MY_BOOKINGS_SQL), {"flight_id": flight_id, "user_id": user_id}
+            ).mappings().all()
 
+    my_seat_ids = {b["seat_id"] for b in my_bookings}
     available = {"premium": 0, "standard": 0, "economy": 0}
     for s in seats:
         if s["available"]:
@@ -228,8 +260,28 @@ def get_flight(flight_id: int):
             "economy": f["economy_fare_cents"],
         },
         "seats_available": available,
+        "is_booked": len(my_bookings) > 0,
+        "my_bookings": [
+            {
+                "booking_id": b["booking_id"],
+                "booking_ref": b["booking_ref"],
+                "traveler_name": b["traveler_name"],
+                "seat_no": b["seat_no"],
+                "tier": b["tier"],
+                "total_cents": b["total_cents"],
+                "checked_bags": b["checked_bags"],
+                "checked_in": b["checked_in_at"] is not None,
+            }
+            for b in my_bookings
+        ],
         "seats": [
-            {"id": s["seat_id"], "seat_no": s["seat_no"], "tier": s["tier"], "available": s["available"]}
+            {
+                "id": s["seat_id"],
+                "seat_no": s["seat_no"],
+                "tier": s["tier"],
+                "available": s["available"],
+                "mine": s["seat_id"] in my_seat_ids,
+            }
             for s in seats
         ],
     }
