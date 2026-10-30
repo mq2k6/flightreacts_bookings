@@ -42,6 +42,44 @@ class LoginRequest(BaseModel):
     password: str
 
 
+@app.get("/flights/search")
+def search_results(
+    departure: str,
+    arrival: str,
+    date: str
+):
+    with engine.connect() as connection:
+        result = connection.execute(
+            text("""
+                SELECT *
+                FROM flight
+                WHERE departure = :departure
+                AND arrival = :arrival
+                AND DATE(departure_time) = :date
+            """),
+            {"departure": departure, "arrival": arrival, "date": date}
+        ).fetchall()
+
+    return [dict(row) for row in result]
+
+@app.get("/flights/upcoming")
+def upcoming_flights(
+    passenger_id: int
+):
+    with engine.connect() as connection:
+        result = connection.execute(
+            text("""
+                SELECT f.*
+                FROM flight f
+                JOIN booking b ON f.id = b.flight_id
+                WHERE b.passenger_id = :passenger_id
+                AND f.departure_time > NOW()
+            """),
+            {"passenger_id": passenger_id}
+        ).fetchall()
+
+    return [dict(row) for row in result]
+
 @app.post("/login")
 def login(request: LoginRequest):
 
