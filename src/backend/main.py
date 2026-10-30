@@ -1,14 +1,15 @@
+import os
+from datetime import datetime, timedelta, timezone
+from typing import Annotated
+
 import bcrypt
 import jwt
-import os
 from dotenv import load_dotenv
-from datetime import datetime, timedelta, timezone
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import create_engine, text
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # Load .env from the same directory as main.py
 load_dotenv()
@@ -43,42 +44,31 @@ class LoginRequest(BaseModel):
 
 
 @app.get("/flights/search")
-def search_results(
-    departure: str,
-    arrival: str,
-    date: str
+def search_flights(
+    from_city: Annotated[str, Query(alias="from")],   # URL uses ?from=
+    to: str,
+    departure_date: str | None = None,
+    seat_tier: str | None = None,
 ):
-    with engine.connect() as connection:
-        result = connection.execute(
-            text("""
-                SELECT *
-                FROM flight
-                WHERE departure = :departure
-                AND arrival = :arrival
-                AND DATE(departure_time) = :date
-            """),
-            {"departure": departure, "arrival": arrival, "date": date}
-        ).fetchall()
-
-    return [dict(row) for row in result]
+    results = [
+        f for f in FLIGHTS
+        if f["from"].lower() == from_city.lower() and f["to"].lower() == to.lower()
+    ]
+    if departure_date:
+        results = [f for f in results if f["departure_date"] == departure_date]
+    if seat_tier:
+        results = [f for f in results if f["seat_tier"].lower() == seat_tier.lower()]
+    return results
 
 @app.get("/flights/upcoming")
-def upcoming_flights(
-    passenger_id: int
-):
-    with engine.connect() as connection:
-        result = connection.execute(
-            text("""
-                SELECT f.*
-                FROM flight f
-                JOIN booking b ON f.id = b.flight_id
-                WHERE b.passenger_id = :passenger_id
-                AND f.departure_time > NOW()
-            """),
-            {"passenger_id": passenger_id}
-        ).fetchall()
-
-    return [dict(row) for row in result]
+def upcoming_flights(limit: int = 10):
+    now = datetime.now()
+    upcoming = [
+        f for f in FLIGHTS
+        if datetime.fromisoformat(f"{f['departure_date']}T{f['departure_time']}") >= now
+    ]
+    upcoming.sort(key=lambda f: (f["departure_date"], f["departure_time"]))
+    return upcoming[:limit]
 
 @app.post("/login")
 def login(request: LoginRequest):
