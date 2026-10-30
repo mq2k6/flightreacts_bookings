@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import create_engine, text
 
 # Load .env from the same directory as main.py
@@ -78,7 +78,6 @@ GROUP BY f.id, o.city, d.city
 ORDER BY f.depart_at
 LIMIT :limit
 """
-
 
 def query_flights(extra: str = "", **params):
     params.setdefault("limit", 100)
@@ -161,14 +160,18 @@ def search_flights(
     from_code: Annotated[str, Query(alias="from")],
     to: str,
     departure_date: date | None = None,
+    flex_days: int = 7,
 ):
     return query_flights(
         extra="""AND f.origin = :origin AND f.destination = :dest
                  AND (CAST(:day AS date) IS NULL
-                      OR (f.depart_at AT TIME ZONE o.timezone)::date = CAST(:day AS date))""",
+                      OR (f.depart_at AT TIME ZONE o.timezone)::date
+                         BETWEEN CAST(:day AS date) - CAST(:flex AS integer)
+                             AND CAST(:day AS date) + CAST(:flex AS integer))""",
         origin=from_code.upper(),
         dest=to.upper(),
         day=departure_date,
+        flex=flex_days,
     )
 
 @app.post("/login")
@@ -233,6 +236,7 @@ def me(passenger_id: int = Depends(get_current_user_id)):
         raise HTTPException(status_code=404, detail="Passenger not found")
     return {"id": result.id, "email": result.email, "full_name": result.full_name}
 
+<<<<<<< HEAD
 FLIGHT_DETAIL_SQL = """
 SELECT f.id, f.flight_no, f.status, f.depart_at, f.arrive_at,
        o.city AS from_city, f.origin      AS from_code, o.timezone AS from_tz,
@@ -286,4 +290,39 @@ def flight_details(flight_id: int, user_id: int = Depends(get_current_user_id)):
             }
             for s in seats
         ],
+=======
+class SignupRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=72)
+    full_name: str = Field(min_length=1, max_length=150)
+
+
+@app.post("/signup")
+def signup(request: SignupRequest):
+    email = request.email.lower()
+    hashed_password = bcrypt.hashpw(
+        request.password.encode("utf-8"), bcrypt.gensalt()
+    ).decode("utf-8")
+
+    try:
+        with engine.begin() as connection:      # begin() = auto-commit
+            result = connection.execute(
+                text("""
+                    INSERT INTO passenger (email, password_hash, full_name)
+                    VALUES (:email, :password_hash, :full_name)
+                    RETURNING id, email, full_name
+                """),
+                {
+                    "email": email,
+                    "password_hash": hashed_password,
+                    "full_name": request.full_name,
+                },
+            ).fetchone()
+    except IntegrityError:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    return {
+        "message": "Signup successful",
+        "passenger": {"id": result.id, "email": result.email, "full_name": result.full_name},
+>>>>>>> c94a2e05df84e821c784435d051b0a2e244d8a7d
     }
