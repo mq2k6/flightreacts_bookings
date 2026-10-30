@@ -155,7 +155,7 @@ function handleViewDetails(id: number) {
 }
 
 function handleBookFlight(id: number) {
-  navigate(`/booking/${id}`);
+  navigate(`/booking-site/${id}`);
 }
 
   return (
@@ -176,7 +176,7 @@ function handleBookFlight(id: number) {
             </Link>
 
             <Link to="/account" className="hover:text-[#5C339E]">
-            My Account
+            My Account 
             </Link>
 
             <button
