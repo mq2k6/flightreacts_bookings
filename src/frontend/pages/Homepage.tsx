@@ -1,57 +1,9 @@
 
 import { useState, useEffect, type FormEvent } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import FlightCard, { type Flight } from "../components/FlightCard";
 
-interface Flight {
-  id: number;
-  flight_number: string;
-  from: string;
-  to: string;
-  departure_date: string;
-  departure_time: string;
-  arrival_time: string;
-  price?: number;
-  seat_number?: string;
-  seat_tier?: string;
-}
 
-interface FlightCardProps {
-  flight: Flight;
-  type: "upcoming" | "search";
-  onAction: (id: number) => void;
-}
-
-function FlightCard({ flight, type, onAction }: FlightCardProps) {
-  return (
-    <div className="flex flex-wrap py-2 px-2.5 justify-between items-center gap-3 rounded-md border border-[#D1C7EB] bg-white w-full">
-
-      <div className="flex flex-col items-start gap-[3px] min-w-0">
-        <p className="text-[#2E2E2E] font-inter text-xs font-bold">
-          {flight.flight_number} · {flight.from} → {flight.to}
-        </p>
-
-        <p className="text-[#737373] font-inter text-[10px]">
-          {flight.departure_date} · {flight.departure_time} → {flight.arrival_time}
-          {type === "upcoming" && flight.seat_number
-            ? ` · Seat ${flight.seat_number} (${flight.seat_tier ?? "N/A"})`
-            : ""}
-          {type === "search" && flight.price !== undefined
-            ? ` · $${flight.price}`
-            : ""}
-        </p>
-      </div>
-
-      <button
-        type="button"
-        onClick={() => onAction(flight.id)}
-        className="cursor-pointer flex py-[7px] px-3.5 justify-center items-center rounded border border-[#D1C7EB] bg-white text-[#2E2E2E] font-inter text-[11px] font-bold hover:bg-[#F2EDFC]"
-      >
-        {type === "upcoming" ? "View details" : "Book flight"}
-      </button>
-
-    </div>
-  );
-}
 
 export default function HomePage() {
   const [from, setFrom] = useState("");
@@ -364,6 +316,7 @@ function handleBookFlight(id: number) {
         </form>
 
        {/* Upcoming Flights */}
+       
         {!searchSubmitted && (
           <div className="flex flex-col items-start gap-2.5 w-full">
 
@@ -376,15 +329,15 @@ function handleBookFlight(id: number) {
                 Loading your upcoming flights...
               </p>
             ) : upcoming.length > 0 ? (
-              upcoming.map((flight) => (
-                <FlightCard
-                  key={flight.id}
-                  flight={flight}
-                  type="upcoming"
-                  onAction={handleViewDetails}
-                />
-              ))
-            ) : (
+            upcoming.map((flight) => (
+              <FlightCard
+                key={flight.id}
+                flight={flight}
+                type="upcoming"
+                onAction={handleViewDetails}
+              />
+            ))
+          ) : (
               <p className="text-[#737373] font-inter text-[10px]">
                 You don't have any upcoming flights.
               </p>
