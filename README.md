@@ -1,15 +1,15 @@
 # Infrastructure
 
 Frontend: React + TypeScript + Tailwind, built with Vite.
-Backend: FastAPI + Python
+\nBackend: FastAPI + Python
 
 # Install
 
 Run `pip install -r requirements.txt`.
+\nYou need Node.js 20 or newer.
 
 # Run it
 
-You need Node.js 20 or newer.
 
 ## Frontend:
 
@@ -22,8 +22,7 @@ npm run dev
 
 ```
 uvcorn main:app --reload
-```
-
+```\n
 Then open the link it prints (usually http://localhost:5173).
 
 # Adding screens to the Frontend from Figma (Figroot)
