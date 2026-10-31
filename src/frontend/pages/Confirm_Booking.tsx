@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { getUserId } from "../utils/auth";
 
 type Tier = "premium" | "standard" | "economy";
 
@@ -11,44 +12,47 @@ interface Seat {
   taken: boolean;
 }
 
-interface FlightDetails {
+interface FlightInfo {
   id: number;
   flight_no: string;
-  status: string;
-  from: string;
   from_code: string;
-  from_tz: string;
-  to: string;
+  from_timezone: string;
   to_code: string;
-  to_tz: string;
   depart_at: string;
-  arrive_at: string;
   fares_cents: Record<Tier, number>;
   seats: Seat[];
 }
 
-const TIERS: { key: Tier; label: string; location: string }[] = [
-  { key: "premium", label: "Premium", location: "Front" },
-  { key: "standard", label: "Standard", location: "Middle" },
-  { key: "economy", label: "Economy", location: "Back" },
-];
+interface Traveler {
+  full_name: string;
+  passport_no: string;
+  bag: boolean;
+}
 
-const dollars = (cents: number) => `$${(cents / 100).toFixed(0)}`;
+const TAX_PERCENT = 14;
+const BAG_CENTS = 1500;
+
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-// Sort seat numbers like 1A, 1B, ... 2A, ... 12F
-function compareSeats(a: string, b: string) {
-  const rowA = parseInt(a, 10);
-  const rowB = parseInt(b, 10);
-  return rowA !== rowB ? rowA - rowB : a.localeCompare(b);
-}
+const money = (cents: number) =>
+  cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
+
+// Integer math so the frontend and backend always round the same way
+const taxFor = (fareCents: number) =>
+  Math.floor((fareCents * TAX_PERCENT + 50) / 100);
+
+const formatCardNumber = (v: string) =>
+  v.replace(/\D/g, "").slice(0, 19).replace(/(.{4})/g, "$1 ").trim();
+
+const formatExp = (v: string) => {
+  const d = v.replace(/\D/g, "").slice(0, 4);
+  return d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d;
+};
 
 function formatDate(iso: string, tz: string) {
   return new Date(iso).toLocaleDateString("en-US", {
-    weekday: "short",
     month: "short",
     day: "numeric",
-    year: "numeric",
     timeZone: tz,
   });
 }
@@ -61,14 +65,27 @@ function formatTime(iso: string, tz: string) {
   });
 }
 
+
+const inputClass =
+  "py-[7px] px-2 rounded border border-[#D1C7EB] bg-white w-full text-[#2E2E2E] font-inter text-[11px] outline-none focus:border-[#5C339E]";
+
 export default function Confirm_Booking() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-
-  const [flight, setFlight] = useState<FlightDetails | null>(null);
+  const userId = getUserId();
+  const [flight, setFlight] = useState<FlightInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [selectedSeatId, setSelectedSeatId] = useState("");
+  const [submitError, setSubmitError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [travelers, setTravelers] = useState<Record<string, Traveler>>({});
+  const [card, setCard] = useState({ number: "", exp: "", cvc: "" });
+
+  const requestedSeatNos = useMemo(
+    () => (searchParams.get("seats") ?? "").split(",").filter(Boolean),
+    [searchParams]
+  );
 
   useEffect(() => {
     async function loadFlight() {
@@ -79,8 +96,8 @@ export default function Confirm_Booking() {
       }
 
       try {
-        const response = await fetch(`http://localhost:8000/flights/${flight.id}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        const response = await fetch(`http://localhost:8000/flights/${id}`, {
+          headers: { Authorization: `Bearer ${token}` },
         });
 
         if (response.status === 401) {
@@ -95,7 +112,19 @@ export default function Confirm_Booking() {
         }
         if (!response.ok) throw new Error("Request failed");
 
-        setFlight(await response.json());
+        const data = await response.json();
+
+        // Same mapping as the flight details page
+        setFlight({
+          ...data,
+          seats: data.seats.map((seat: any) => ({
+            id: seat.id,
+            seat_no: seat.seat_no,
+            tier: seat.tier,
+            taken: !seat.available,
+            fare_cents: data.fares_cents[seat.tier],
+          })),
+        });
       } catch (err) {
         console.error("Error loading flight:", err);
         setError("Unable to load this flight. Please try again.");
@@ -107,36 +136,138 @@ export default function Confirm_Booking() {
     loadFlight();
   }, [id, navigate]);
 
-  const openSeats = useMemo(
-    () =>
-      (flight?.seats ?? [])
-        .filter((s) => !s.taken)
-        .sort((a, b) => compareSeats(a.seat_no, b.seat_no)),
-    [flight]
-  );
+  // Only seats that exist and are still open, in the order they were picked
+  const selectedSeats = useMemo(() => {
+    if (!flight) return [];
+    return requestedSeatNos
+      .map((no) => flight.seats.find((s) => s.seat_no === no && !s.taken))
+      .filter((s): s is Seat => Boolean(s));
+  }, [flight, requestedSeatNos]);
 
-  const selectedSeat = openSeats.find((s) => String(s.id) === selectedSeatId);
+  const someUnavailable =
+    flight !== null && selectedSeats.length !== requestedSeatNos.length;
+
+  const getTraveler = (seatNo: string): Traveler =>
+    travelers[seatNo] ?? { full_name: "", passport_no: "", bag: false };
+
+  function updateTraveler(seatNo: string, changes: Partial<Traveler>) {
+    setTravelers((prev) => ({
+      ...prev,
+      [seatNo]: { ...getTraveler(seatNo), ...changes },
+    }));
+  }
+
+  const fareTotal = selectedSeats.reduce((sum, s) => sum + s.fare_cents, 0);
+  const taxTotal = selectedSeats.reduce((sum, s) => sum + taxFor(s.fare_cents), 0);
+  const bagCount = selectedSeats.filter((s) => getTraveler(s.seat_no).bag).length;
+  const bagTotal = bagCount * BAG_CENTS;
+  const grandTotal = fareTotal + taxTotal + bagTotal;
 
   function handleLogout() {
     localStorage.removeItem("token");
     localStorage.removeItem("passenger");
     navigate("/login");
   }
+  function handleAccount(id: string) {
+  navigate(`/account/${id}`);
+}
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!flight || selectedSeats.length === 0 || someUnavailable) return;
 
-  function handleContinue() {
-    if (!selectedSeat) return;
-    navigate(`/booking/${id}?seat=${encodeURIComponent(selectedSeat.seat_no)}`);
+    const token = localStorage.getItem("token");
+    if (!token) {
+      navigate("/login");
+      return;
+    }
+
+    setSubmitting(true);
+    setSubmitError("");
+
+    try {
+      // Step 1: the mock "processor" charges the card and returns a token
+      const payRes = await fetch("http://localhost:8000/payments/mock-charge", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          card_number: card.number,
+          exp: card.exp,
+          cvc: card.cvc,
+        }),
+      });
+
+      // Fake processing delay so it feels real
+      await new Promise((r) => setTimeout(r, 1200));
+
+      if (payRes.status === 401) {
+        handleLogout();
+        return;
+      }
+      if (!payRes.ok) {
+        const body = await payRes.json().catch(() => null);
+        setSubmitError(typeof body?.detail === "string" ? body.detail : "Payment failed.");
+        return;
+      }
+      const { payment_token } = await payRes.json();
+
+      // Step 2: create the booking using the payment token (never the card)
+      const response = await fetch("http://localhost:8000/bookings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          flight_id: flight.id,
+          payment_token,
+          travelers: selectedSeats.map((seat) => {
+            const t = getTraveler(seat.seat_no);
+            return {
+              seat_no: seat.seat_no,
+              full_name: t.full_name.trim(),
+              passport_no: t.passport_no.trim(),
+              checked_bags: t.bag ? 1 : 0,
+            };
+          }),
+        }),
+      });
+
+      if (response.status === 401) {
+        handleLogout();
+        return;
+      }
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        setSubmitError(
+          typeof body?.detail === "string"
+            ? body.detail
+            : "Unable to complete your booking. Please try again."
+        );
+        return;
+      }
+
+      const userId = getUserId();
+        if (userId === null) {
+        navigate("/home");
+        return;
+        }
+        handleAccount(String(userId));
+    } catch (err) {
+      console.error("Error creating booking:", err);
+      setSubmitError("Unable to complete your booking. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  function tierStats(tier: Tier) {
-    const seats = flight!.seats.filter((s) => s.tier === tier);
-    const rows = seats.map((s) => parseInt(s.seat_no, 10)).filter((n) => !isNaN(n));
-    return {
-      total: seats.length,
-      open: seats.filter((s) => !s.taken).length,
-      rows: rows.length ? [Math.min(...rows), Math.max(...rows)] : null,
-    };
-  }
+  const seatLabel =
+    selectedSeats.length === 1
+      ? `Seat ${selectedSeats[0].seat_no} (${capitalize(selectedSeats[0].tier)})`
+      : `Seats ${selectedSeats.map((s) => s.seat_no).join(", ")}`;
 
   return (
     <div className="flex flex-col items-start rounded-lg border border-[#D1C7EB] bg-white min-h-screen w-full overflow-hidden">
@@ -147,7 +278,7 @@ export default function Confirm_Booking() {
         </p>
         <nav className="flex gap-3 text-[#737373] font-inter text-[10px]">
           <Link to="/home" className="hover:text-[#5C339E]">Home</Link>
-          <Link to="/account" className="hover:text-[#5C339E]">My Account</Link>
+          <Link to={`/account/${userId}`}  className="hover:text-[#5C339E]">My Account</Link>
           <button type="button" onClick={handleLogout} className="hover:text-[#5C339E]">
             Log out
           </button>
@@ -155,9 +286,8 @@ export default function Confirm_Booking() {
       </div>
 
       {/* Main Content */}
-      <div className="flex py-4 px-5 flex-col items-start gap-3 w-full max-w-[720px]">
-        {loading ? (
-          <p className="text-[#737373] font-inter text-[11px]">Loading flight...</p>
+<div className="flex py-4 px-5 flex-col items-start gap-3 w-full max-w-[720px] mx-auto">        {loading ? (
+          <p className="text-[#737373] font-inter text-[11px]">Loading booking...</p>
         ) : error || !flight ? (
           <>
             <p className="text-[#737373] font-inter text-[11px]">
@@ -167,107 +297,170 @@ export default function Confirm_Booking() {
               ← Back to home
             </Link>
           </>
-        ) : (
+        ) : requestedSeatNos.length === 0 || selectedSeats.length === 0 || someUnavailable ? (
           <>
-            {/* Title + status */}
-            <div className="flex items-center justify-between gap-3 w-full">
-              <h1 className="text-[#2E2E2E] font-inter text-lg font-bold">
-                Flight {flight.flight_no}
-              </h1>
-              <span className="rounded-xl border border-[#D1C7EB] bg-white px-3 py-1 text-[#2E2E2E] font-inter text-[10px]">
-                {capitalize(flight.status)}
-              </span>
-            </div>
+            <p className="text-[#737373] font-inter text-[11px]">
+              {requestedSeatNos.length === 0
+                ? "No seats were selected."
+                : "One or more of the seats you picked are no longer available."}
+            </p>
+            <Link
+              to={`/flight-details/${id}`}
+              className="text-[#804DD9] font-inter text-[11px] font-bold hover:underline"
+            >
+              ← Back to seat selection
+            </Link>
+          </>
+        ) : (
+          <form onSubmit={handleSubmit} className="flex flex-col items-start gap-3 w-full">
+            <h1 className="text-[#2E2E2E] font-inter text-lg font-bold">Review &amp; pay</h1>
 
-            {/* Route summary */}
             <p className="text-[#2E2E2E] font-inter text-[11px]">
-              {flight.from} ({flight.from_code}) → {flight.to} ({flight.to_code})
+              Flight {flight.flight_no} · {flight.from_code} → {flight.to_code}
               {" · "}
-              {formatDate(flight.depart_at, flight.from_tz)}
+              {formatDate(flight.depart_at, flight.from_timezone)},{" "}
+              {formatTime(flight.depart_at, flight.from_timezone)}
               {" · "}
-              Departs {formatTime(flight.depart_at, flight.from_tz)}
-              {" · "}
-              Arrives {formatTime(flight.arrive_at, flight.to_tz)}
+              {seatLabel}
             </p>
 
-            {/* Seats & fares by tier */}
-            <h2 className="text-[#2E2E2E] font-inter text-xs font-bold mt-2">
-              Seats &amp; fares by tier
-            </h2>
+            {/* Traveler details, one block per seat */}
+            {selectedSeats.map((seat, index) => {
+              const t = getTraveler(seat.seat_no);
+              return (
+                <div key={seat.id} className="flex flex-col gap-2 w-full">
+                  {selectedSeats.length > 1 && (
+                    <p className="text-[#2E2E2E] font-inter text-[11px] font-bold">
+                      Traveler {index + 1} · Seat {seat.seat_no} ({capitalize(seat.tier)})
+                    </p>
+                  )}
 
-            <div className="w-full overflow-hidden rounded-lg border border-[#D1C7EB]">
-              <table className="w-full text-left font-inter text-[11px] text-[#2E2E2E]">
-                <thead className="bg-[#F2EDFC]">
-                  <tr>
-                    <th className="px-3 py-2 font-bold">Tier</th>
-                    <th className="px-3 py-2 font-bold">Location</th>
-                    <th className="px-3 py-2 font-bold">Fare</th>
-                    <th className="px-3 py-2 font-bold">Seats open</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {TIERS.map(({ key, label, location }) => {
-                    const stats = tierStats(key);
-                    return (
-                      <tr key={key}>
-                        <td className="px-3 py-2">{label}</td>
-                        <td className="px-3 py-2">
-                          {location}
-                          {stats.rows && ` · rows ${stats.rows[0]}–${stats.rows[1]}`}
-                        </td>
-                        <td className="px-3 py-2">{dollars(flight.fares_cents[key])}</td>
-                        <td className="px-3 py-2">
-                          {stats.open} / {stats.total}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                  <div className="flex flex-wrap gap-2 w-full">
+                    <label className="flex flex-col items-start gap-1 flex-[2] min-w-[200px]">
+                      <span className="text-[#737373] font-inter text-[10px]">Full name</span>
+                      <input
+                        type="text"
+                        required
+                        placeholder="As shown on passport"
+                        value={t.full_name}
+                        onChange={(e) => updateTraveler(seat.seat_no, { full_name: e.target.value })}
+                        className={inputClass}
+                      />
+                    </label>
+
+                    <label className="flex flex-col items-start gap-1 flex-1 min-w-[140px]">
+                      <span className="text-[#737373] font-inter text-[10px]">Passport #</span>
+                      <input
+                        type="text"
+                        required
+                        value={t.passport_no}
+                        onChange={(e) => updateTraveler(seat.seat_no, { passport_no: e.target.value })}
+                        className={inputClass}
+                      />
+                    </label>
+                  </div>
+
+                  <label className="flex items-center gap-1.5 text-[#2E2E2E] font-inter text-[10px] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={t.bag}
+                      onChange={(e) => updateTraveler(seat.seat_no, { bag: e.target.checked })}
+                      className="accent-[#5C339E]"
+                    />
+                    Add a checked bag (+{money(BAG_CENTS)})
+                  </label>
+                </div>
+              );
+            })}
+
+            {/* Fare breakdown */}
+            <div className="flex flex-col gap-1 w-full rounded-lg border border-[#D1C7EB] bg-white p-3 text-[#2E2E2E] font-inter text-[11px]">
+              {selectedSeats.map((seat) => (
+                <div key={seat.id} className="flex justify-between">
+                  <span>
+                    Seat {seat.seat_no} fare ({capitalize(seat.tier)})
+                  </span>
+                  <span>{money(seat.fare_cents)}</span>
+                </div>
+              ))}
+              <div className="flex justify-between">
+                <span>Taxes &amp; fees</span>
+                <span>{money(taxTotal)}</span>
+              </div>
+              {bagCount > 0 && (
+                <div className="flex justify-between">
+                  <span>Checked bag{bagCount > 1 ? `s (${bagCount})` : ""}</span>
+                  <span>{money(bagTotal)}</span>
+                </div>
+              )}
+              <div className="flex justify-between font-bold">
+                <span>Total</span>
+                <span>{money(grandTotal)}</span>
+              </div>
             </div>
-
-            <p className="text-[#2E2E2E] font-inter text-[11px] font-bold">
-              {openSeats.length} of {flight.seats.length} seats available
-            </p>
 
             <p className="text-[#737373] font-inter text-[10px]">
-              Price depends on where the seat is in the plane. Choose an open seat
-              from the list.
+              Cancellation policy: full refund up to 24h after booking; 80% refund until 48h
+              before departure.
             </p>
 
-            {/* Seat dropdown (placeholder for the seat map) */}
-            <label className="flex flex-col items-start gap-1 w-full max-w-[260px]">
-              <span className="text-[#737373] font-inter text-[10px]">Seat</span>
-              <select
-                value={selectedSeatId}
-                onChange={(e) => setSelectedSeatId(e.target.value)}
-                className="py-[7px] px-2 rounded border border-[#D1C7EB] bg-white w-full text-[#2E2E2E] font-inter text-[11px] outline-none focus:border-[#5C339E]"
-              >
-                <option value="">Select a seat...</option>
-                {openSeats.map((seat) => (
-                  <option key={seat.id} value={seat.id}>
-                    {seat.seat_no}, {dollars(seat.fare_cents)}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {selectedSeat && (
-              <p className="text-[#804DD9] font-inter text-[11px] font-bold">
-                Selected: Seat {selectedSeat.seat_no} · {capitalize(selectedSeat.tier)} ·{" "}
-                {dollars(selectedSeat.fare_cents)}
+            {/* Payment (mock processor) */}
+            <div className="flex flex-col items-start gap-1 w-full">
+              <span className="text-[#737373] font-inter text-[10px]">Payment</span>
+              <div className="flex flex-wrap gap-2 w-full">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  required
+                  placeholder="Card number"
+                  value={card.number}
+                  onChange={(e) => setCard({ ...card, number: formatCardNumber(e.target.value) })}
+                  className={`${inputClass} flex-[2] min-w-[200px]`}
+                />
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  required
+                  placeholder="MM/YY"
+                  value={card.exp}
+                  onChange={(e) => setCard({ ...card, exp: formatExp(e.target.value) })}
+                  className={`${inputClass} w-20`}
+                />
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  required
+                  placeholder="CVC"
+                  maxLength={4}
+                  value={card.cvc}
+                  onChange={(e) => setCard({ ...card, cvc: e.target.value.replace(/\D/g, "") })}
+                  className={`${inputClass} w-16`}
+                />
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="cursor-pointer flex py-[7px] px-3.5 justify-center items-center rounded bg-[#5C339E] text-white font-inter text-[11px] font-bold hover:bg-[#48277D] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {submitting ? "Processing..." : `Confirm & pay ${money(grandTotal)}`}
+                </button>
+              </div>
+              <p className="text-[#737373] font-inter text-[10px]">
+                Demo only. Use 4242 4242 4242 4242 with any future date and CVC. Use
+                4000 0000 0000 0002 to test a decline.
               </p>
+            </div>
+
+            {submitError && (
+              <p className="text-[#B3261E] font-inter text-[11px]">{submitError}</p>
             )}
 
-            <button
-              type="button"
-              onClick={handleContinue}
-              disabled={!selectedSeat}
-              className="cursor-pointer flex py-[7px] px-3.5 justify-center items-center rounded bg-[#5C339E] text-white font-inter text-[11px] font-bold hover:bg-[#48277D] disabled:opacity-50 disabled:cursor-not-allowed"
+            <Link
+              to={`/flight-details/${id}`}
+              className="text-[#804DD9] font-inter text-[10px] font-bold hover:underline"
             >
-              Continue to booking
-            </button>
-          </>
+              ← Change seats
+            </Link>
+          </form>
         )}
       </div>
     </div>

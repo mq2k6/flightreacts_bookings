@@ -1,7 +1,9 @@
 import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated
-
+import re
+import secrets
+import string
 import bcrypt
 import jwt
 from dotenv import load_dotenv
@@ -9,7 +11,8 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, bindparam
+from sqlalchemy.exc import IntegrityError
 
 # Load .env from the same directory as main.py
 load_dotenv()
@@ -29,6 +32,16 @@ engine = create_engine(DATABASE_URL)
 
 JWT_ALGORITHM = "HS256"
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+optional_security = HTTPBearer(auto_error=False)   # no token = no error
+
 
 def get_current_user_id(
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -40,16 +53,6 @@ def get_current_user_id(
         raise HTTPException(status_code=401, detail="Token expired")
     except (jwt.InvalidTokenError, KeyError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid token")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-optional_security = HTTPBearer(auto_error=False)   # no token = no error
 
 
 def get_optional_user_id(
@@ -171,24 +174,27 @@ def upcoming_flights(user_id: int = Depends(get_current_user_id), limit: int = 1
 
 
 @app.get("/flights/search")
+
 def search_flights(
     from_code: Annotated[str, Query(alias="from")],
     to: str,
     departure_date: date | None = None,
     flex_days: int = 7,
+    user_id: int = Depends(get_current_user_id),
 ):
     return query_flights(
         extra="""AND f.origin = :origin AND f.destination = :dest
                  AND (CAST(:day AS date) IS NULL
-                      OR (f.depart_at AT TIME ZONE o.timezone)::date
-                         BETWEEN CAST(:day AS date) - CAST(:flex AS integer)
-                             AND CAST(:day AS date) + CAST(:flex AS integer))""",
+                    OR (f.depart_at AT TIME ZONE o.timezone)::date
+                        BETWEEN CAST(:day AS date) - CAST(:flex AS integer)
+                            AND CAST(:day AS date) + CAST(:flex AS integer))""",
         origin=from_code.upper(),
         dest=to.upper(),
         day=departure_date,
         flex=flex_days,
+        user_id=user_id,
+       
     )
-
 
 FLIGHT_DETAIL_SQL = """
 SELECT f.id, f.flight_no, f.status, f.depart_at, f.arrive_at,
@@ -353,6 +359,341 @@ class SignupRequest(BaseModel):
     password: str = Field(min_length=8, max_length=72)
     full_name: str = Field(min_length=1, max_length=150)
 
+# ---------- Mock payment processor ----------
+
+PAYMENT_SECRET = JWT_SECRET + "-payments"  # separate key so payment tokens can't be used to log in
+
+TEST_CARDS = {
+    "4000000000000002": "Your card was declined.",
+    "4000000000009995": "Insufficient funds.",
+}
+
+
+class MockChargeRequest(BaseModel):
+    card_number: str
+    exp: str   # "MM/YY"
+    cvc: str
+
+
+def luhn_ok(number: str) -> bool:
+    total = 0
+    for i, ch in enumerate(reversed(number)):
+        d = int(ch)
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
+
+
+def card_brand(number: str) -> str:
+    if number.startswith("4"):
+        return "Visa"
+    if number[:2] in {"51", "52", "53", "54", "55"}:
+        return "Mastercard"
+    if number[:2] in {"34", "37"}:
+        return "Amex"
+    return "Card"
+
+
+@app.post("/payments/mock-charge")
+def mock_charge(req: MockChargeRequest, user_id: int = Depends(get_current_user_id)):
+    number = re.sub(r"\D", "", req.card_number)
+    if not (13 <= len(number) <= 19) or not luhn_ok(number):
+        raise HTTPException(status_code=400, detail="Invalid card number")
+
+    m = re.fullmatch(r"(\d{2})/(\d{2})", req.exp.strip())
+    if not m:
+        raise HTTPException(status_code=400, detail="Expiry must be MM/YY")
+    month, year = int(m.group(1)), 2000 + int(m.group(2))
+    now = datetime.now(timezone.utc)
+    if not 1 <= month <= 12 or (year, month) < (now.year, now.month):
+        raise HTTPException(status_code=400, detail="Card has expired")
+
+    if not re.fullmatch(r"\d{3,4}", req.cvc):
+        raise HTTPException(status_code=400, detail="Invalid security code")
+
+    if number in TEST_CARDS:
+        raise HTTPException(status_code=402, detail=TEST_CARDS[number])
+
+    payment_id = "pay_" + secrets.token_hex(12)   # fits payment_ref VARCHAR(64)
+    token = jwt.encode(
+        {
+            "jti": payment_id,
+            "payer_id": user_id,
+            "brand": card_brand(number),
+            "last4": number[-4:],
+            "exp": now + timedelta(minutes=10),
+        },
+        PAYMENT_SECRET,
+        algorithm=JWT_ALGORITHM,
+    )
+    return {"payment_token": token, "brand": card_brand(number), "last4": number[-4:]}
+
+
+def verify_payment_token(token: str, user_id: int) -> dict:
+    try:
+        payload = jwt.decode(token, PAYMENT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=402, detail="Payment expired or invalid. Please re-enter your card.")
+    if payload.get("payer_id") != user_id:
+        raise HTTPException(status_code=402, detail="Payment does not match this account")
+    return payload
+
+
+# ---------- Bookings ----------
+
+BOOKING_TAX_PERCENT = 13
+BOOKING_BAG_CENTS = 1500
+
+
+class TravelerIn(BaseModel):
+    seat_no: str = Field(min_length=1, max_length=3)
+    full_name: str = Field(min_length=1, max_length=150)
+    passport_no: str = Field(min_length=1, max_length=40)   # validated, not stored (no column)
+    checked_bags: int = Field(default=0, ge=0, le=1)
+
+
+class BookingRequest(BaseModel):
+    flight_id: int
+    payment_token: str
+    travelers: list[TravelerIn] = Field(min_length=1, max_length=9)
+
+
+def new_booking_ref() -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(6))
+
+
+@app.post("/bookings")
+def create_booking(req: BookingRequest, user_id: int = Depends(get_current_user_id)):
+    payment = verify_payment_token(req.payment_token, user_id)
+    payment_ref = payment["jti"]
+
+    seat_nos = [t.seat_no for t in req.travelers]
+    if len(set(seat_nos)) != len(seat_nos):
+        raise HTTPException(status_code=400, detail="Duplicate seats in request")
+
+    created = []
+    try:
+        with engine.begin() as conn:  # commits on success, rolls back on any exception
+            # Lock the flight row so concurrent bookings run one at a time
+            flight = conn.execute(
+                text("""
+                    SELECT id, plane_id,
+                           premium_fare_cents, standard_fare_cents, economy_fare_cents
+                    FROM flight
+                    WHERE id = :id AND status = 'scheduled' AND depart_at >= now()
+                    FOR UPDATE
+                """),
+                {"id": req.flight_id},
+            ).mappings().first()
+            if not flight:
+                raise HTTPException(status_code=404, detail="Flight is not available for booking")
+
+            # One payment can only be used for one booking
+            reused = conn.execute(
+                text("SELECT 1 FROM passenger_seat WHERE payment_ref = :p"),
+                {"p": payment_ref},
+            ).first()
+            if reused:
+                raise HTTPException(status_code=402, detail="This payment was already used")
+
+            fares = {
+                "premium": flight["premium_fare_cents"],
+                "standard": flight["standard_fare_cents"],
+                "economy": flight["economy_fare_cents"],
+            }
+
+            for t in req.travelers:
+                seat = conn.execute(
+                    text("SELECT id, tier FROM seat WHERE plane_id = :plane AND seat_no = :no"),
+                    {"plane": flight["plane_id"], "no": t.seat_no},
+                ).mappings().first()
+                if not seat:
+                    raise HTTPException(status_code=400, detail=f"Seat {t.seat_no} does not exist")
+
+                taken = conn.execute(
+                    text("""
+                        SELECT 1 FROM passenger_seat
+                        WHERE flight_id = :f AND seat_id = :s AND status = 'confirmed'
+                    """),
+                    {"f": req.flight_id, "s": seat["id"]},
+                ).first()
+                if taken:
+                    raise HTTPException(status_code=409, detail=f"Seat {t.seat_no} was just taken")
+
+                # Prices always come from the database, never from the browser
+                fare = fares[seat["tier"]]
+                tax = (fare * BOOKING_TAX_PERCENT + 50) // 100
+                bag_fees = t.checked_bags * BOOKING_BAG_CENTS
+                total = fare + tax + bag_fees
+                ref = new_booking_ref()
+
+                conn.execute(
+                    text("""
+                        INSERT INTO passenger_seat
+                            (booking_ref, passenger_id, flight_id, seat_id, traveler_name,
+                             base_fare_cents, taxes_cents, fees_cents,
+                             checked_bags, bag_fees_cents, total_cents,
+                             payment_ref, status)
+                        VALUES
+                            (:ref, :pid, :fid, :sid, :name,
+                             :base, :tax, 0,
+                             :bags, :bag_fees, :total,
+                             :pay, 'confirmed')
+                    """),
+                    {
+                        "ref": ref, "pid": user_id, "fid": req.flight_id, "sid": seat["id"],
+                        "name": t.full_name.strip(),
+                        "base": fare, "tax": tax,
+                        "bags": t.checked_bags, "bag_fees": bag_fees,
+                        "total": total, "pay": payment_ref,
+                    },
+                )
+                created.append(
+                    {"booking_ref": ref, "seat_no": t.seat_no, "total_cents": total}
+                )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=409, detail="Those seats were just taken. Please pick again."
+        )
+
+    return {"message": "Booking confirmed", "bookings": created}
+
+
+# ---------- Account page + cancellations ----------
+
+def refund_policy(total_cents: int, created_at: datetime, depart_at: datetime, now: datetime):
+    """Returns (refund_cents, percent)."""
+    if now >= depart_at:
+        pct = 0
+    elif now <= created_at + timedelta(hours=24):
+        pct = 100
+    elif depart_at - now >= timedelta(hours=48):
+        pct = 80
+    else:
+        pct = 0
+    return total_cents * pct // 100, pct
+
+
+ACCOUNT_UPCOMING_SQL = """
+SELECT ps.id AS booking_id, ps.booking_ref, ps.total_cents, ps.created_at,
+       s.seat_no, s.tier,
+       f.id AS flight_id, f.flight_no, f.depart_at,
+       f.origin AS from_code, f.destination AS to_code, o.timezone AS from_tz
+FROM passenger_seat ps
+JOIN flight f  ON f.id = ps.flight_id
+JOIN seat s    ON s.id = ps.seat_id
+JOIN airport o ON o.code = f.origin
+WHERE ps.passenger_id = :uid AND ps.status = 'confirmed' AND f.depart_at >= now()
+ORDER BY f.depart_at, f.id, length(s.seat_no), s.seat_no
+"""
+
+ACCOUNT_HISTORY_SQL = """
+SELECT f.id AS flight_id, f.flight_no, f.depart_at,
+       f.origin AS from_code, f.destination AS to_code, o.timezone AS from_tz,
+       string_agg(s.seat_no, ', ' ORDER BY length(s.seat_no), s.seat_no) AS seats
+FROM passenger_seat ps
+JOIN flight f  ON f.id = ps.flight_id
+JOIN seat s    ON s.id = ps.seat_id
+JOIN airport o ON o.code = f.origin
+WHERE ps.passenger_id = :uid AND ps.status = 'confirmed' AND f.depart_at < now()
+GROUP BY f.id, o.timezone
+ORDER BY f.depart_at DESC
+LIMIT 50
+"""
+
+
+@app.get("/account/overview")
+def account_overview(user_id: int = Depends(get_current_user_id)):
+    now = datetime.now(timezone.utc)
+    with engine.connect() as conn:
+        upcoming = conn.execute(text(ACCOUNT_UPCOMING_SQL), {"uid": user_id}).mappings().all()
+        history = conn.execute(text(ACCOUNT_HISTORY_SQL), {"uid": user_id}).mappings().all()
+        taken = conn.execute(
+            text("""
+                SELECT COUNT(DISTINCT ps.flight_id)
+                FROM passenger_seat ps JOIN flight f ON f.id = ps.flight_id
+                WHERE ps.passenger_id = :uid AND ps.status = 'confirmed' AND f.depart_at < now()
+            """),
+            {"uid": user_id},
+        ).scalar()
+
+    upcoming_out = []
+    for r in upcoming:
+        refund, pct = refund_policy(r["total_cents"], r["created_at"], r["depart_at"], now)
+        upcoming_out.append({
+            "booking_id": r["booking_id"],
+            "booking_ref": r["booking_ref"],
+            "flight_id": r["flight_id"],
+            "flight_no": r["flight_no"],
+            "from_code": r["from_code"], "to_code": r["to_code"],
+            "from_timezone": r["from_tz"],
+            "depart_at": r["depart_at"],
+            "seat_no": r["seat_no"],
+            "tier": r["tier"],
+            "total_cents": r["total_cents"],
+            "refund_cents": refund,
+            "refund_percent": pct,
+        })
+
+    return {
+        "total_flights_taken": taken or 0,
+        "upcoming": upcoming_out,
+        "history": [
+            {
+                "flight_id": r["flight_id"],
+                "flight_no": r["flight_no"],
+                "from_code": r["from_code"], "to_code": r["to_code"],
+                "from_timezone": r["from_tz"],
+                "depart_at": r["depart_at"],
+                "seats": r["seats"],
+            }
+            for r in history
+        ],
+    }
+
+
+class CancelRequest(BaseModel):
+    booking_ids: list[int] = Field(min_length=1, max_length=20)
+
+
+@app.post("/bookings/cancel")
+def cancel_bookings(req: CancelRequest, user_id: int = Depends(get_current_user_id)):
+    now = datetime.now(timezone.utc)
+    ids = list(set(req.booking_ids))
+
+    select_stmt = text("""
+        SELECT ps.id, ps.total_cents, ps.created_at, f.depart_at
+        FROM passenger_seat ps
+        JOIN flight f ON f.id = ps.flight_id
+        WHERE ps.id IN :ids AND ps.passenger_id = :uid AND ps.status = 'confirmed'
+        FOR UPDATE OF ps
+    """).bindparams(bindparam("ids", expanding=True))
+
+    total_refund = 0
+    with engine.begin() as conn:
+        rows = conn.execute(select_stmt, {"ids": ids, "uid": user_id}).mappings().all()
+        if len(rows) != len(ids):
+            raise HTTPException(status_code=404, detail="Booking not found or already cancelled")
+
+        for r in rows:
+            if r["depart_at"] <= now:
+                raise HTTPException(status_code=400, detail="This flight has already departed")
+            refund, _ = refund_policy(r["total_cents"], r["created_at"], r["depart_at"], now)
+            conn.execute(
+                text("""
+                    UPDATE passenger_seat
+                    SET status = 'cancelled', cancelled_at = now(), refund_cents = :refund
+                    WHERE id = :id
+                """),
+                {"refund": refund, "id": r["id"]},
+            )
+            total_refund += refund
+
+    return {"message": "Cancelled", "cancelled": len(ids), "refund_cents": total_refund}
 
 @app.post("/signup")
 def signup(request: SignupRequest):
@@ -382,3 +723,4 @@ def signup(request: SignupRequest):
         "message": "Signup successful",
         "passenger": {"id": result.id, "email": result.email, "full_name": result.full_name},
     }
+

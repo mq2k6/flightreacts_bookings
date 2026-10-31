@@ -4,6 +4,25 @@ import { useNavigate, Link } from "react-router-dom";
 import FlightCard, { type Flight } from "../components/FlightCard";
 
 
+function groupByFlight(rows: Flight[]): Flight[] {
+  const map = new Map<number, Flight>();
+
+  for (const row of rows) {
+    const key = row.flight_id ?? row.id!;
+    const seat = row.seat_no
+      ? { seat_no: row.seat_no, tier: row.tier ?? "" }
+      : null;
+
+    const existing = map.get(key);
+    if (existing) {
+      if (seat) existing.seats!.push(seat);
+    } else {
+      map.set(key, { ...row, seats: seat ? [seat] : [] });
+    }
+  }
+
+  return Array.from(map.values());
+}
 
 export default function HomePage() {
   const [from, setFrom] = useState("");
@@ -77,7 +96,7 @@ export default function HomePage() {
       }
 
       const flightsData = await flightsResponse.json();
-      setUpcoming(flightsData);
+      setUpcoming(Array.isArray(flightsData) ? groupByFlight(flightsData) : []);
 
     } catch (error) {
       console.error("Error loading upcoming flights:", error);
@@ -88,6 +107,8 @@ export default function HomePage() {
   }
 
   getUser();
+
+  
 }, [navigate]);
 
 
@@ -149,14 +170,13 @@ export default function HomePage() {
 
   navigate("/login");
 }
-
+function handleAccount(id: string) {
+  navigate(`/account/${id}`);
+}
 function handleViewDetails(id: number) {
   navigate(`/flight-details/${id}`);
 }
 
-function handleBookFlight(id: number) {
-  navigate(`/booking-site/${id}`);
-}
 
   return (
     <div className="flex flex-col items-start rounded-lg border border-[#D1C7EB] bg-white min-h-screen w-full overflow-hidden">
@@ -175,9 +195,13 @@ function handleBookFlight(id: number) {
             Home
             </Link>
 
-            <Link to="/account" className="hover:text-[#5C339E]">
-            My Account 
-            </Link>
+            <button
+            type="button"
+            onClick={() => { if(userId!=null) {handleAccount(userId)}}}
+            className="hover:text-[#5C339E]"
+            >
+            My Account
+            </button>
 
             <button
             type="button"
@@ -331,10 +355,11 @@ function handleBookFlight(id: number) {
             ) : upcoming.length > 0 ? (
             upcoming.map((flight) => (
               <FlightCard
-                key={flight.id}
+                key={flight.flight_id ?? flight.id}
                 flight={flight}
                 type="upcoming"
-                onAction={handleViewDetails}
+                onAction={() => {if (flight.flight_id!=undefined) {
+                    handleViewDetails(flight.flight_id)}}}
               />
             ))
           ) : (
@@ -380,7 +405,9 @@ function handleBookFlight(id: number) {
                   key={flight.id}
                   flight={flight}
                   type="search"
-                  onAction={handleBookFlight}
+                  onAction={() => {if (flight.id!=undefined) {
+                    handleViewDetails(flight.id)}
+                  }}
                 />
               ))
             ) : (

@@ -60,10 +60,6 @@ export default function LogIn() {
         <p className="text-[#2E2E2E] font-inter text-xs font-bold w-fit">
           Flight Reservation System
         </p>
-
-        <p className="text-[#737373] font-inter text-[10px] w-fit">
-          Help
-        </p>
       </div>
 
       {/* Login Form */}

@@ -13,6 +13,8 @@ export interface Flight {
   // upcoming only
   seat_no?: string;
   tier?: string;
+  seats?: { seat_no: string; tier: string }[];   // add this
+
   // search only
   fares_cents?: { premium: number; standard: number; economy: number };
 }
@@ -55,11 +57,16 @@ export default function FlightCard({ flight, type, onAction }: FlightCardProps) 
     `${formatTime(flight.depart_at)} → ${formatTime(flight.arrive_at)}`,
   ];
 
-  if (flight.seat_no) {
-    details.push(
-      `Seat ${flight.seat_no}${flight.tier ? ` (${capitalize(flight.tier)})` : ""}`
-    );
-  }
+  const seats = flight.seats?.length
+  ? flight.seats
+  : flight.seat_no
+  ? [{ seat_no: flight.seat_no, tier: flight.tier ?? "" }]
+  : [];
+
+if (seats.length > 0) {
+  const label = seats.length === 1 ? "Seat" : "Seats";
+  details.push(`${label} ${seats.map((s) => s.seat_no).join(", ")}`);
+}
 
   if (type === "search") {
     const fare = lowestFare(flight.fares_cents);
@@ -85,7 +92,7 @@ export default function FlightCard({ flight, type, onAction }: FlightCardProps) 
         onClick={() => flightId !== undefined && onAction(flightId)}
         className="cursor-pointer shrink-0 rounded-md border border-[#D1C7EB] bg-white px-4 py-2 text-[#2E2E2E] font-inter text-xs font-bold hover:bg-[#F2EDFC]"
       >
-        {type === "upcoming" ? "View details" : "Book"}
+        {"View details"}
       </button>
     </div>
   );

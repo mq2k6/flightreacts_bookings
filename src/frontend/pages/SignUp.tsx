@@ -8,30 +8,66 @@ import { useNavigate } from "react-router-dom";
  export default function SignUp() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
   const [confirm_password, setConfirmPassword] = useState("");
-
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const matchingPass = password == confirm_password
-
   const navigate = useNavigate();
+
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    // TODO: replace with the real login call once the backend is ready
-    console.log("Log in with", { email, password, confirm_password });
-    navigate("/Login")
+  e.preventDefault();
 
-    //const res = await fetch("/createAccount", {
-    //    method: "POST",
-    //    headers: {
-    //        "Content-Type": "application/json"
-    //    },
-    //    body: JSON.stringify({
-    //        email: email,
-    //       password: password
-    //    })
-    //});
-
-    
+  if (!matchingPass) {
+    setError("Passwords do not match.");
+    return;
   }
+
+  setSubmitting(true);
+  setError("");
+
+  try {
+    const response = await fetch("http://localhost:8000/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: email.trim(),
+        password,
+        full_name: name.trim(),
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+
+      // FastAPI sends a string for our own errors (e.g. "Email already registered")
+      // and a list of objects for validation errors (e.g. password too short)
+      if (typeof body?.detail === "string") {
+        setError(body.detail);
+      } else if (Array.isArray(body?.detail)) {
+        const first = body.detail[0];
+        const field = first?.loc?.[first.loc.length - 1];
+        if (field === "password") {
+          setError("Password must be 8 to 72 characters.");
+        } else if (field === "email") {
+          setError("Please enter a valid email address.");
+        } else {
+          setError("Please check your details and try again.");
+        }
+      } else {
+        setError("Unable to create your account. Please try again.");
+      }
+      return;
+    }
+
+    navigate("/login");
+  } catch (err) {
+    console.error("Error signing up:", err);
+    setError("Unable to reach the server. Please try again.");
+  } finally {
+    setSubmitting(false);
+  }
+}
 
   return (
 
@@ -43,9 +79,6 @@ import { useNavigate } from "react-router-dom";
         Flight Reservation System
       </p>
 
-      <p className="text-[#737373] font-inter text-[10px] w-fit">
-        Help
-      </p>
     </div>
 
     {/* Login Form */}
@@ -56,6 +89,23 @@ import { useNavigate } from "react-router-dom";
       <p className="text-[#2E2E2E] font-inter text-lg font-bold w-fit">
         Sign Up
       </p>
+      {/* Name */}
+      <label className="flex flex-col items-start gap-1 w-full overflow-hidden">
+        <p className="text-[#737373] font-inter text-[10px] w-fit">
+          Full Name
+        </p>
+
+        <input
+          type="text"
+          required
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="John Doe"
+          autoComplete="name"
+          className="flex py-[7px] px-2 items-start rounded border border-[#D1C7EB] bg-[#FFF] w-full overflow-hidden text-[#2E2E2E] font-inter text-[11px] outline-none focus:border-[#5C339E]"
+        />
+      </label>
+
 
       {/* Email */}
       <label className="flex flex-col items-start gap-1 w-full overflow-hidden">
@@ -83,10 +133,12 @@ import { useNavigate } from "react-router-dom";
         <input
           type="password"
           required
+          minLength={8} 
+          maxLength={72}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="••••••••"
-          autoComplete="current-password"
+          autoComplete="new-password"
           className="flex py-[7px] px-2 items-start rounded border border-[#D1C7EB] bg-[#FFF] w-full overflow-hidden text-[#2E2E2E] font-inter text-[11px] outline-none focus:border-[#5C339E]"
         />
       </label>
@@ -99,31 +151,37 @@ import { useNavigate } from "react-router-dom";
 
         <input
           type="password"
-          required
+          required 
+          minLength={8} 
+          maxLength={72}
           value={confirm_password}
           onChange={(e) => setConfirmPassword(e.target.value)}
           placeholder="••••••••"
-          autoComplete="current-password"
+          autoComplete="new-password"
           className="flex py-[7px] px-2 items-start rounded border border-[#D1C7EB] bg-[#FFF] w-full overflow-hidden text-[#2E2E2E] font-inter text-[11px] outline-none focus:border-[#5C339E]"
         />
       </label>
         {/* Conditional message */}
-            {confirm_password && (
-                <p className="text-[#737373] font-inter text-[10px] w-fit">
-                <p style={{ color: matchingPass ? 'green' : 'red' }}>
-                {matchingPass ? 'Passwords match!' : 'Passwords do not match.'}
-                </p> </p>
-            )}
+          {confirm_password && (
+        <p
+          className="font-inter text-[10px] w-fit"
+          style={{ color: matchingPass ? "green" : "red" }}
+        >
+          {matchingPass ? "Passwords match!" : "Passwords do not match."}
+        </p>
+      )}
 
-
+      {error && (
+        <p className="text-[#B3261E] font-inter text-[11px] w-full">{error}</p>
+      )}
       {/* Sign Up Button */}
       <button
         type="submit"
-        disabled={!matchingPass&& confirm_password!=""}
-        className="cursor-pointer text-nowrap flex py-[7px] px-3.5 justify-center items-center rounded bg-[#5C339E] w-fit overflow-hidden"
+        disabled={submitting || (!matchingPass && confirm_password !== "")}
+        className="cursor-pointer text-nowrap flex py-[7px] px-3.5 justify-center items-center rounded bg-[#5C339E] w-fit overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <p className="text-[#FFF] font-inter text-[11px] font-bold w-fit">
-          Create Account
+          {submitting ? "Creating..." : "Create Account"}
         </p>
       </button>
 
