@@ -71,7 +71,7 @@ import { useNavigate } from "react-router-dom";
 
   return (
 
-  <div className="flex flex-col items-start rounded-lg border border-[#D1C7EB] bg-[#FFF] min-w-screen min-h-screen overflow-hidden">
+<div className="flex flex-col items-start rounded-lg border border-[#D1C7EB] bg-[#FFF] min-w-screen min-h-screen overflow-hidden">
 
     {/* Header */}
     <div className="flex py-2.5 px-4 justify-between items-center bg-[#F2EDFC] w-full overflow-hidden">
@@ -84,7 +84,7 @@ import { useNavigate } from "react-router-dom";
     {/* Login Form */}
     <form
       onSubmit={handleSubmit}
-      className="flex py-4 px-5 flex-col items-start gap-2.5 w-full max-w-[600px] h-full overflow-hidden"
+      className="flex py-4 px-5 flex-col items-start gap-2.5 w-full max-w-[600px] mx-auto overflow-hidden"
     >
       <p className="text-[#2E2E2E] font-inter text-lg font-bold w-fit">
         Sign Up
