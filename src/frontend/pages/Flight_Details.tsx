@@ -304,13 +304,13 @@ useEffect(() => {
                           className="flex flex-wrap justify-between items-center gap-2 rounded-md border border-[#D1C7EB] bg-white p-2.5"
                         >
                           <div className="flex flex-col gap-1">
-                            <p className="text-[#2E2E2E] font-inter text-[11px] font-bold">
-                              Seat {booking.seat_no} · {capitalize(booking.tier)}
-                            </p>
-                            <p className="text-[#737373] font-inter text-[10px]">
-                              Booking reference: {booking.booking_ref}
-                            </p>
-                          </div>
+                          <p className="text-[#2E2E2E] font-inter text-[11px] font-bold">
+                            {booking.traveler_name}
+                          </p>
+                          <p className="text-[#737373] font-inter text-[10px]">
+                            Seat {booking.seat_no} · {capitalize(booking.tier)} · Ref {booking.booking_ref}
+                          </p>
+                        </div>
 
                           <p className="text-[#2E2E2E] font-inter text-[11px] font-bold">
                             {dollars(booking.total_cents)}
