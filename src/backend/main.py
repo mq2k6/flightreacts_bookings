@@ -71,6 +71,11 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
+class LoginRequest_Employee(BaseModel):
+    email: EmailStr
+    password: str
+    emp_id: int
+
 
 FLIGHT_SQL = """
 SELECT f.id, f.flight_no,
@@ -340,6 +345,57 @@ def login(request: LoginRequest):
             "id": result.id,
             "email": result.email,
             "full_name": result.full_name
+        }
+    }
+
+
+@app.post("/employee_login")
+def login(request: LoginRequest_Employee):
+
+    # Find staff by email
+    with engine.connect() as connection:
+        result = connection.execute(
+            text("""
+                SELECT id, employee_no, password_hash
+                FROM staff
+                WHERE email = :email
+            """),
+            {"email": request.email}
+        ).fetchone()
+
+    # Account doesn't exist
+    if not result:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
+
+    # Verify password using bcrypt
+    if not bcrypt.checkpw(
+        request.password.encode("utf-8"),
+        result.password_hash.encode("utf-8")
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
+
+    # Generate JWT
+    token = jwt.encode(
+        {
+            "passenger_id": result.id,
+            "exp": datetime.now(timezone.utc) + timedelta(hours=24)
+        },
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM
+    )
+
+    return {
+        "message": "Login successful",
+        "token": token,
+        "employee": {
+            "id": result.id,
+            "employee_no": result.employee_no
         }
     }
 
