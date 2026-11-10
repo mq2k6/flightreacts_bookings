@@ -71,10 +71,9 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
-class LoginRequest_Employee(BaseModel):
-    email: EmailStr
+class EmployeeLoginRequest(BaseModel):
+    empId: str
     password: str
-    emp_id: int
 
 
 FLIGHT_SQL = """
@@ -350,44 +349,36 @@ def login(request: LoginRequest):
 
 
 @app.post("/employee_login")
-def login(request: LoginRequest_Employee):
+def employee_login(request: EmployeeLoginRequest):
+    emp_id = request.empId.strip()
 
-    # Find staff by email
     with engine.connect() as connection:
         result = connection.execute(
             text("""
-                SELECT id, employee_no, password_hash
-                FROM staff
-                WHERE email = :email
+                SELECT p.id, p.password_hash,
+                       s.employee_no
+                FROM passenger p
+                JOIN staff s ON s.passenger_id = p.id
+                WHERE s.employee_no = :empId
             """),
-            {"email": request.email}
+            {"empId": emp_id},
         ).fetchone()
 
-    # Account doesn't exist
-    if not result:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid email or password"
-        )
-
-    # Verify password using bcrypt
-    if not bcrypt.checkpw(
+    # Not found, not staff, or wrong password: same generic error
+    if not result or not bcrypt.checkpw(
         request.password.encode("utf-8"),
-        result.password_hash.encode("utf-8")
+        result.password_hash.encode("utf-8"),
     ):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid email or password"
-        )
+        raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    # Generate JWT
     token = jwt.encode(
         {
             "passenger_id": result.id,
-            "exp": datetime.now(timezone.utc) + timedelta(hours=24)
+            "employee_no": result.employee_no,
+            "exp": datetime.now(timezone.utc) + timedelta(hours=24),
         },
         JWT_SECRET,
-        algorithm=JWT_ALGORITHM
+        algorithm=JWT_ALGORITHM,
     )
 
     return {
@@ -395,8 +386,8 @@ def login(request: LoginRequest_Employee):
         "token": token,
         "employee": {
             "id": result.id,
-            "employee_no": result.employee_no
-        }
+            "employee_no": result.employee_no,
+        },
     }
 
 @app.get("/me")
