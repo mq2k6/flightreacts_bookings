@@ -137,11 +137,14 @@ export default function LogIn() {
           New here? Create an account
         </button>
 
-        {/* Additional Information */}
-        <p className="text-[#737373] font-inter text-[10px] w-full max-w-[560px]">
-          Travelers and staff use the same login. The account role decides what
-          Home shows (staff get extra tools).
-        </p>
+        <button
+          type="button"
+          onClick={() => navigate("/emp-login")}
+          className="text-[#804DD9] font-inter text-[11px] font-bold w-fit hover:text-[#5C339E] hover:underline"
+        >
+          Employee Log In
+        </button>
+
 
       </form>
     </div>
