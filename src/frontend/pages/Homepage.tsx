@@ -2,6 +2,7 @@
 import { useState, useEffect, type FormEvent } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import FlightCard, { type Flight } from "../components/FlightCard";
+import { getUserId } from "../utils/auth";
 
 
 function groupByFlight(rows: Flight[]): Flight[] {
@@ -33,7 +34,7 @@ export default function HomePage() {
   const [directOnly, setDirectOnly] = useState(true);
   const [seatTier, setSeatTier] = useState("Any");
 
-  const [userId, setUserId] = useState<string | null>(null);
+  const userId = getUserId();
   const navigate = useNavigate();
 
   const [searchSubmitted, setsearchSubmitted] = useState(false);
@@ -44,41 +45,15 @@ export default function HomePage() {
   const [loadingSearch, setLoadingSearch] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
+useEffect(() => {
   async function getUser() {
     const token = localStorage.getItem("token");
 
-    if (!token) {
+    if (!token || userId === null) {
       navigate("/login");
       return;
     }
 
-    // First, verify the user is authenticated
-    try {
-      const response = await fetch("http://localhost:8000/me", {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        localStorage.removeItem("token");
-        localStorage.removeItem("passenger");
-        navigate("/login");
-        return;
-      }
-
-      const passenger = await response.json();
-      setUserId(passenger.id);
-
-    } catch (error) {
-      console.error("Error verifying user:", error);
-      navigate("/login");
-      return;
-    }
-
-    // Then, independently try to load upcoming flights
     try {
       const flightsResponse = await fetch(
         "http://localhost:8000/flights/upcoming",
@@ -90,13 +65,14 @@ export default function HomePage() {
       );
 
       if (!flightsResponse.ok) {
-        console.log("Upcoming flights endpoint unavailable.");
         setUpcoming([]);
         return;
       }
 
       const flightsData = await flightsResponse.json();
-      setUpcoming(Array.isArray(flightsData) ? groupByFlight(flightsData) : []);
+      setUpcoming(
+        Array.isArray(flightsData) ? groupByFlight(flightsData) : []
+      );
 
     } catch (error) {
       console.error("Error loading upcoming flights:", error);
@@ -107,9 +83,7 @@ export default function HomePage() {
   }
 
   getUser();
-
-  
-}, [navigate]);
+}, [navigate, userId]);
 
 
   async function handleSearch(e: FormEvent<HTMLFormElement>) {
@@ -165,8 +139,6 @@ export default function HomePage() {
   function handleLogout() {
   localStorage.removeItem("token");
   localStorage.removeItem("passenger");
-
-  setUserId(null); // If you're tracking userId in state
 
   navigate("/login");
 }
