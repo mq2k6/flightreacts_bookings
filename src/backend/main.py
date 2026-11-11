@@ -777,3 +777,165 @@ def signup(request: SignupRequest):
         "passenger": {"id": result.id, "email": result.email, "full_name": result.full_name},
     }
 
+
+
+# ---------- 1. All plane types ----------
+PLANES_SQL = """
+SELECT p.id, p.model, p.total_seats,
+       p.premium_fare_per_minute, p.standard_fare_per_minute, p.economy_fare_per_minute,
+       COUNT(s.id) FILTER (WHERE s.tier = 'premium')  AS premium_seats,
+       COUNT(s.id) FILTER (WHERE s.tier = 'standard') AS standard_seats,
+       COUNT(s.id) FILTER (WHERE s.tier = 'economy')  AS economy_seats
+FROM plane p
+LEFT JOIN seat s ON s.plane_id = p.id
+GROUP BY p.id
+ORDER BY p.model, p.id
+"""
+
+
+@app.get("/planes")
+def get_planes():
+    with engine.connect() as conn:
+        rows = conn.execute(text(PLANES_SQL)).mappings().all()
+    return [
+        {
+            "id": r["id"],
+            "model": r["model"],
+            "total_seats": r["total_seats"],
+            "seats_by_tier": {
+                "premium": r["premium_seats"],
+                "standard": r["standard_seats"],
+                "economy": r["economy_seats"],
+            },
+            "fare_per_minute": {
+                "premium": float(r["premium_fare_per_minute"]),
+                "standard": float(r["standard_fare_per_minute"]),
+                "economy": float(r["economy_fare_per_minute"]),
+            },
+        }
+        for r in rows
+    ]
+
+
+# ---------- 2. Fare calculator ----------
+FARE_CALC_SQL = """
+WITH t AS (
+    SELECT EXTRACT(EPOCH FROM (CAST(:arrive AS timestamptz) - CAST(:depart AS timestamptz))) / 60 AS mins
+)
+SELECT p.id, p.model, t.mins,
+       ROUND(t.mins * p.premium_fare_per_minute)  AS premium,
+       ROUND(t.mins * p.standard_fare_per_minute) AS standard,
+       ROUND(t.mins * p.economy_fare_per_minute)  AS economy
+FROM plane p, t
+WHERE p.id = :plane_id
+"""
+
+
+@app.get("/fares/calculate")
+def calculate_fares(plane_id: int, depart_at: datetime, arrive_at: datetime):
+    if arrive_at <= depart_at:
+        raise HTTPException(status_code=400, detail="arrive_at must be after depart_at")
+
+    with engine.connect() as conn:
+        r = conn.execute(
+            text(FARE_CALC_SQL),
+            {"plane_id": plane_id, "depart": depart_at, "arrive": arrive_at},
+        ).mappings().first()
+
+    if not r:
+        raise HTTPException(status_code=404, detail="Plane not found")
+
+    return {
+        "plane_id": r["id"],
+        "model": r["model"],
+        "duration_minutes": int(round(r["mins"])),
+        "fares_cents": {
+            "premium": int(r["premium"]),
+            "standard": int(r["standard"]),
+            "economy": int(r["economy"]),
+        },
+    }
+
+
+# ---------- 3. Delete a flight (staff only) ----------
+def require_staff(user_id: int = Depends(get_current_user_id)) -> int:
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM staff WHERE passenger_id = :id"), {"id": user_id}
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=403, detail="Staff only")
+    return user_id
+
+
+@app.delete("/flights/{flight_id}")
+def delete_flight(flight_id: int, staff_id: int = Depends(require_staff)):
+    try:
+        with engine.begin() as conn:
+            deleted = conn.execute(
+                text("DELETE FROM flight WHERE id = :id RETURNING id, flight_no"),
+                {"id": flight_id},
+            ).fetchone()
+    except IntegrityError:
+        raise HTTPException(
+            status_code=409,
+            detail="Flight has bookings and can't be deleted. Cancel it instead.",
+        )
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Flight not found")
+
+    return {"message": "Flight deleted", "flight_id": deleted.id, "flight_no": deleted.flight_no}
+
+
+
+SEAT_MAP_SQL = """
+SELECT p.id AS plane_id, p.model, p.seat_columns, p.seat_layout,
+       s.id AS seat_id, s.seat_no, s.tier
+FROM plane p
+JOIN seat s ON s.plane_id = p.id
+WHERE (CAST(:plane_id AS integer) IS NULL OR p.id = CAST(:plane_id AS integer))
+ORDER BY p.id, length(s.seat_no), s.seat_no
+"""
+
+
+@app.get("/planes/seat-maps")
+def get_seat_maps(plane_id: int | None = None):
+    with engine.connect() as conn:
+        rows = conn.execute(text(SEAT_MAP_SQL), {"plane_id": plane_id}).mappings().all()
+
+    planes = {}
+    for r in rows:
+        plane = planes.setdefault(r["plane_id"], {
+            "plane_id": r["plane_id"],
+            "model": r["model"],
+            "seat_columns": r["seat_columns"],
+            "seat_layout": r["seat_layout"],
+            "_rows": {},
+        })
+        seat_no = r["seat_no"]                  # e.g. "12A" -> row 12, column "A"
+        plane["_rows"].setdefault(int(seat_no[:-1]), []).append({
+            "id": r["seat_id"],
+            "seat_no": seat_no,
+            "column": seat_no[-1],
+            "tier": r["tier"],
+        })
+
+    result = []
+    for plane in planes.values():
+        by_row = plane.pop("_rows")
+        plane["rows"] = [
+            {"row": n, "seats": sorted(by_row[n], key=lambda s: s["column"])}
+            for n in sorted(by_row)
+        ]
+        letters = sorted({s["column"] for row in plane["rows"] for s in row["seats"]})
+        groups, i = [], 0
+        for size in (plane["seat_layout"] or [len(letters)]):
+            groups.append(letters[i:i + size])
+            i += size
+        plane["column_groups"] = groups
+        result.append(plane)
+
+    if plane_id is not None and not result:
+        raise HTTPException(status_code=404, detail="Plane not found")
+    return result
