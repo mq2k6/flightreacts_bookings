@@ -49,7 +49,6 @@ export default function HomePage() {
   const [searchSubmitted, setsearchSubmitted] = useState(false);
   const [searchResults, setSearchResults] = useState<Flight[]>([]);
   const [upcoming, setUpcoming] = useState<Flight[]>([]);
-
   const [loadingUpcoming, setLoadingUpcoming] = useState(true);
   const [loadingSearch, setLoadingSearch] = useState(false);
   const [error, setError] = useState("");
@@ -202,20 +201,18 @@ async function handleAddFlight() {
   }
 
   try {
-    const response = await fetch("http://localhost:8000/add-flight", {
+    const response = await fetch("http://localhost:8000/flights", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
-        departure_airport: from,
-        arrival_airport: to,
-        departure_date: departureDate,
-        departure_time: adminDepartureTime,
-        duration_hours: Number(hours),
-        duration_minutes: Number(minutes),
         plane_id: Number(planeId),
+        origin: from.trim().toUpperCase(),
+        destination: to.trim().toUpperCase(),
+        depart_at: `${departureDate}T${adminDepartureTime}`,
+        duration_minutes: Number(hours)*60 + Number(minutes),
       }),
     });
 
@@ -225,7 +222,7 @@ async function handleAddFlight() {
       throw new Error(data.detail || "Failed to add flight");
     }
 
-    alert("Flight successfully added!");
+    alert(`Flight ${data.flight.flight_no} successfully added!`);
 
     // Clear the form
     setFrom("");
