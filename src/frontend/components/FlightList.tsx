@@ -4,9 +4,10 @@ interface FlightListProps {
   flights: Flight[];
   type: "upcoming" | "search";
   onAction: (id: number) => void;
+  onPassengerList: (id: number) => void;
 }
 
-export default function FlightList({ flights, type, onAction }: FlightListProps) {
+export default function FlightList({ flights, type, onAction, onPassengerList }: FlightListProps) {
   return (
     <div className="flex flex-col gap-3 w-full">
       {flights.map((flight) => (
@@ -15,6 +16,7 @@ export default function FlightList({ flights, type, onAction }: FlightListProps)
           flight={flight}
           type={type}
           onAction={onAction}
+          onPassengerList={onPassengerList}
         />
       ))}
     </div>

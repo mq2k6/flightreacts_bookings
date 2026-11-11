@@ -7,7 +7,7 @@ import SignUp from "./pages/SignUp";
 import Account from "./pages/Account"
 import Flight_Details from "./pages/Flight_Details"
 import Confirm_Booking from "./pages/Confirm_Booking"
-
+import Passenger_List from "./pages/Passenger_List"
 
 export default function App() {
 
@@ -18,6 +18,7 @@ export default function App() {
         <Route path="/emp-login" element={<Emp_LogIn />} />
         <Route path="/signup" element={<SignUp />} />
         <Route path="/home" element={<HomePage />} />
+        <Route path="/passenger-list/:id" element={<Passenger_List />} />
         <Route path="/account/:id" element={<Account />} />
         <Route path="/flight-details/:id" element={<Flight_Details />} />
         <Route path="/booking-site/:id" element={<Confirm_Booking />} />

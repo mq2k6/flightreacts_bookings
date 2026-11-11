@@ -190,7 +190,9 @@ function handleAccount(id: string) {
 function handleViewDetails(id: number) {
   navigate(`/flight-details/${id}`);
 }
-
+function handlePassengerList(id: number) {
+  navigate(`/passenger-list/${id}`);
+}
 async function handleAddFlight() {
   const token = localStorage.getItem("token");
 
@@ -527,6 +529,8 @@ function handleSubmit(e: FormEvent<HTMLFormElement>) {
                 type="upcoming"
                 onAction={() => {if (flight.flight_id!=undefined) {
                     handleViewDetails(flight.flight_id)}}}
+                onPassengerList={() => {if (flight.flight_id!=undefined) {
+                    handlePassengerList(flight.flight_id)}}}
               />
             ))
           ) : (
@@ -575,6 +579,8 @@ function handleSubmit(e: FormEvent<HTMLFormElement>) {
                   onAction={() => {if (flight.id!=undefined) {
                     handleViewDetails(flight.id)}
                   }}
+                  onPassengerList={() =>{if (flight.id!=undefined) {
+                    handlePassengerList(flight.id)}}}
                 />
               ))
             ) : (

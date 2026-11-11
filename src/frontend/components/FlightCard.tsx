@@ -27,7 +27,9 @@ interface FlightCardProps {
   flight: Flight;
   type: "upcoming" | "search";
   onAction: (id: number) => void;
+  onPassengerList: (id: number) => void;
 }
+
 
 const formatDate = (iso?: string) =>
   iso
@@ -56,7 +58,7 @@ function lowestFare(fares?: Flight["fares_cents"]) {
 }
 
 
-export default function FlightCard({ flight, type, onAction }: FlightCardProps) {
+export default function FlightCard({ flight, type, onAction, onPassengerList }: FlightCardProps) {
   const [employeeId, setEmployeeId] = useState<number | null>(getEmployeeId());
 
   useEffect(() => {
@@ -111,6 +113,7 @@ if (seats.length > 0) {
       <div className="flex items-center gap-2 ml-auto shrink-0">
       <button
         type="button"
+        id="viewDetails"
         onClick={() => flightId !== undefined && onAction(flightId)}
         className="cursor-pointer rounded-md border border-[#D1C7EB] bg-white px-4 py-2 text-[#2E2E2E] font-inter text-xs font-bold hover:bg-[#F2EDFC]"
       >
@@ -120,7 +123,8 @@ if (seats.length > 0) {
       {employeeId != null && (
         <button
           type="button"
-          onClick={() => flightId !== undefined && onAction(flightId)} //NEED TO CHANGE ACTION
+          id="viewList"
+          onClick={() => flightId !== undefined && onPassengerList(flightId)} 
           className="cursor-pointer rounded-md border border-[#D1C7EB] bg-white px-4 py-2 text-[#2E2E2E] font-inter text-xs font-bold hover:bg-[#F2EDFC]"
         >
           Passenger List
