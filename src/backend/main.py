@@ -1,9 +1,11 @@
 import os
-from datetime import date, datetime, timedelta, timezone
-from typing import Annotated
 import re
 import secrets
 import string
+from datetime import date, datetime, timedelta, timezone
+from typing import Annotated
+from zoneinfo import ZoneInfo
+
 import bcrypt
 import jwt
 from dotenv import load_dotenv
@@ -13,6 +15,25 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import create_engine, text, bindparam
 from sqlalchemy.exc import IntegrityError
+
+
+# ==============================================================
+# FILE LAYOUT
+# ==============================================================
+# 1. App setup & config
+# 2. Auth dependencies (token checks, staff check)
+# 3. Auth endpoints (login, signup, employee login, /me)
+# 4. Flights (search, upcoming, details)
+# 5. Planes & fares
+# 6. Payments (mock processor)
+# 7. Bookings (create)
+# 8. Account page & cancellations
+# 9. Staff tools (verify password, cancel/create flight, passenger list)
+
+
+# ==============================================================
+# 1. APP SETUP & CONFIG
+# ==============================================================
 
 # Load .env from the same directory as main.py
 load_dotenv()
@@ -32,6 +53,7 @@ engine = create_engine(DATABASE_URL)
 
 JWT_ALGORITHM = "HS256"
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -39,6 +61,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ==============================================================
+# 2. AUTH DEPENDENCIES (token checks, staff check)
+# ==============================================================
 
 optional_security = HTTPBearer(auto_error=False)   # no token = no error
 
@@ -66,20 +93,194 @@ def get_optional_user_id(
     except (jwt.InvalidTokenError, KeyError, ValueError):
         return None                                  # bad/expired token = treated as logged out
 
+
+def require_staff(user_id: int = Depends(get_current_user_id)) -> int:
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT 1
+                FROM staff
+                WHERE passenger_id = :user_id
+            """),
+            {"user_id": user_id}
+        ).first()
+
+    if not result:
+        raise HTTPException(
+            status_code=403,
+            detail="Staff access required"
+        )
+
+    return user_id
+
+
+# ==============================================================
+# 3. AUTH ENDPOINTS (login, signup, employee login, /me)
+# ==============================================================
+
 # Login request structure
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
+
+@app.post("/login")
+def login(request: LoginRequest):
+
+    # Find passenger by email
+    with engine.connect() as connection:
+        result = connection.execute(
+            text("""
+                SELECT id, email, password_hash, full_name
+                FROM passenger
+                WHERE email = :email
+            """),
+            {"email": request.email}
+        ).fetchone()
+
+    # Account doesn't exist
+    if not result:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
+
+    # Verify password using bcrypt
+    if not bcrypt.checkpw(
+        request.password.encode("utf-8"),
+        result.password_hash.encode("utf-8")
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
+
+    # Generate JWT
+    token = jwt.encode(
+        {
+            "passenger_id": result.id,
+            "exp": datetime.now(timezone.utc) + timedelta(hours=24)
+        },
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM
+    )
+
+    return {
+        "message": "Login successful",
+        "token": token,
+        "passenger": {
+            "id": result.id,
+            "email": result.email,
+            "full_name": result.full_name
+        }
+    }
+
+
+class SignupRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=72)
+    full_name: str = Field(min_length=1, max_length=150)
+
+
+@app.post("/signup")
+def signup(request: SignupRequest):
+    email = request.email.lower()
+    hashed_password = bcrypt.hashpw(
+        request.password.encode("utf-8"), bcrypt.gensalt()
+    ).decode("utf-8")
+
+    try:
+        with engine.begin() as connection:      # begin() = auto-commit
+            result = connection.execute(
+                text("""
+                    INSERT INTO passenger (email, password_hash, full_name)
+                    VALUES (:email, :password_hash, :full_name)
+                    RETURNING id, email, full_name
+                """),
+                {
+                    "email": email,
+                    "password_hash": hashed_password,
+                    "full_name": request.full_name,
+                },
+            ).fetchone()
+    except IntegrityError:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    return {
+        "message": "Signup successful",
+        "passenger": {"id": result.id, "email": result.email, "full_name": result.full_name},
+    }
+
+
 class EmployeeLoginRequest(BaseModel):
     empId: str
     password: str
 
-class PasswordVerificationRequest(BaseModel):
-    password: str
 
-class FlightCancellationRequest(BaseModel):
-    password: str
+@app.post("/employee_login")
+def employee_login(request: EmployeeLoginRequest):
+    emp_id = request.empId.strip()
+
+    with engine.connect() as connection:
+        result = connection.execute(
+            text("""
+                SELECT p.id, p.password_hash,
+                       s.employee_no, p.email, p.full_name
+                FROM passenger p
+                JOIN staff s ON s.passenger_id = p.id
+                WHERE s.employee_no = :empId
+            """),
+            {"empId": emp_id},
+        ).fetchone()
+
+    # Not found, not staff, or wrong password: same generic error
+    if not result or not bcrypt.checkpw(
+        request.password.encode("utf-8"),
+        result.password_hash.encode("utf-8"),
+    ):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = jwt.encode(
+        {
+            "passenger_id": result.id,
+            "employee_no": result.employee_no,
+            "exp": datetime.now(timezone.utc) + timedelta(hours=24),
+        },
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM,
+    )
+
+    return {
+        "message": "Login successful",
+        "token": token,
+        "employee": {
+            "id": result.id,
+            "employee_no": result.employee_no,
+        },
+        "passenger": {
+            "id": result.id,
+            "email": result.email,
+            "full_name": result.full_name
+        }
+        
+    }
+
+
+@app.get("/me")
+def me(passenger_id: int = Depends(get_current_user_id)):
+    with engine.connect() as connection:
+        result = connection.execute(
+            text("SELECT id, email, full_name FROM passenger WHERE id = :id"),
+            {"id": passenger_id},
+        ).fetchone()
+    if not result:
+        raise HTTPException(status_code=404, detail="Passenger not found")
+    return {"id": result.id, "email": result.email, "full_name": result.full_name}
+
+
+# ==============================================================
+# 4. FLIGHTS (search, upcoming, details)
+# ==============================================================
 
 FLIGHT_SQL = """
 SELECT f.id, f.flight_no,
@@ -105,6 +306,7 @@ GROUP BY f.id, o.city, d.city
 ORDER BY f.depart_at
 LIMIT :limit
 """
+
 
 def query_flights(extra: str = "", **params):
     params.setdefault("limit", 100)
@@ -205,6 +407,7 @@ def search_flights(
        
     )
 
+
 FLIGHT_DETAIL_SQL = """
 SELECT f.id, f.flight_no, f.status, f.depart_at, f.arrive_at,
        f.premium_fare_cents, f.standard_fare_cents, f.economy_fare_cents,
@@ -219,6 +422,7 @@ JOIN plane p ON p.id = f.plane_id
 WHERE f.id = :flight_id
 """
 
+
 FLIGHT_SEATS_SQL = """
 SELECT s.id AS seat_id, s.seat_no, s.tier, (ps.id IS NULL) AS available
 FROM flight f
@@ -228,6 +432,7 @@ LEFT JOIN passenger_seat ps
 WHERE f.id = :flight_id
 ORDER BY length(s.seat_no), s.seat_no
 """
+
 
 MY_BOOKINGS_SQL = """
 SELECT ps.id AS booking_id, ps.booking_ref, ps.traveler_name, ps.seat_id,
@@ -304,125 +509,97 @@ def get_flight(flight_id: int, user_id: int | None = Depends(get_optional_user_i
         ],
     }
 
-@app.post("/login")
-def login(request: LoginRequest):
 
-    # Find passenger by email
-    with engine.connect() as connection:
-        result = connection.execute(
-            text("""
-                SELECT id, email, password_hash, full_name
-                FROM passenger
-                WHERE email = :email
-            """),
-            {"email": request.email}
-        ).fetchone()
+# ==============================================================
+# 5. PLANES & FARES
+# ==============================================================
 
-    # Account doesn't exist
-    if not result:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid email or password"
-        )
+# ---------- 1. All plane types ----------
+PLANES_SQL = """
+SELECT p.id, p.model, p.total_seats,
+       p.premium_fare_per_minute, p.standard_fare_per_minute, p.economy_fare_per_minute,
+       COUNT(s.id) FILTER (WHERE s.tier = 'premium')  AS premium_seats,
+       COUNT(s.id) FILTER (WHERE s.tier = 'standard') AS standard_seats,
+       COUNT(s.id) FILTER (WHERE s.tier = 'economy')  AS economy_seats
+FROM plane p
+LEFT JOIN seat s ON s.plane_id = p.id
+GROUP BY p.id
+ORDER BY p.model, p.id
+"""
 
-    # Verify password using bcrypt
-    if not bcrypt.checkpw(
-        request.password.encode("utf-8"),
-        result.password_hash.encode("utf-8")
-    ):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid email or password"
-        )
 
-    # Generate JWT
-    token = jwt.encode(
+@app.get("/planes")
+def get_planes():
+    with engine.connect() as conn:
+        rows = conn.execute(text(PLANES_SQL)).mappings().all()
+    return [
         {
-            "passenger_id": result.id,
-            "exp": datetime.now(timezone.utc) + timedelta(hours=24)
-        },
-        JWT_SECRET,
-        algorithm=JWT_ALGORITHM
-    )
+            "id": r["id"],
+            "model": r["model"],
+            "total_seats": r["total_seats"],
+            "seats_by_tier": {
+                "premium": r["premium_seats"],
+                "standard": r["standard_seats"],
+                "economy": r["economy_seats"],
+            },
+            "fare_per_minute": {
+                "premium": float(r["premium_fare_per_minute"]),
+                "standard": float(r["standard_fare_per_minute"]),
+                "economy": float(r["economy_fare_per_minute"]),
+            },
+        }
+        for r in rows
+    ]
+
+
+# ---------- 2. Fare calculator ----------
+FARE_CALC_SQL = """
+WITH t AS (
+    SELECT EXTRACT(EPOCH FROM (CAST(:arrive AS timestamptz) - CAST(:depart AS timestamptz))) / 60 AS mins
+)
+SELECT p.id, p.model, t.mins,
+       ROUND(t.mins * p.premium_fare_per_minute)  AS premium,
+       ROUND(t.mins * p.standard_fare_per_minute) AS standard,
+       ROUND(t.mins * p.economy_fare_per_minute)  AS economy
+FROM plane p, t
+WHERE p.id = :plane_id
+"""
+
+
+@app.get("/fares/calculate")
+def calculate_fares(plane_id: int, depart_at: datetime, arrive_at: datetime):
+    if arrive_at <= depart_at:
+        raise HTTPException(status_code=400, detail="arrive_at must be after depart_at")
+
+    with engine.connect() as conn:
+        r = conn.execute(
+            text(FARE_CALC_SQL),
+            {"plane_id": plane_id, "depart": depart_at, "arrive": arrive_at},
+        ).mappings().first()
+
+    if not r:
+        raise HTTPException(status_code=404, detail="Plane not found")
 
     return {
-        "message": "Login successful",
-        "token": token,
-        "passenger": {
-            "id": result.id,
-            "email": result.email,
-            "full_name": result.full_name
-        }
+        "plane_id": r["id"],
+        "model": r["model"],
+        "duration_minutes": int(round(r["mins"])),
+        "fares_cents": {
+            "premium": int(r["premium"]),
+            "standard": int(r["standard"]),
+            "economy": int(r["economy"]),
+        },
     }
 
 
-@app.post("/employee_login")
-def employee_login(request: EmployeeLoginRequest):
-    emp_id = request.empId.strip()
-
-    with engine.connect() as connection:
-        result = connection.execute(
-            text("""
-                SELECT p.id, p.password_hash,
-                       s.employee_no, p.email, p.full_name
-                FROM passenger p
-                JOIN staff s ON s.passenger_id = p.id
-                WHERE s.employee_no = :empId
-            """),
-            {"empId": emp_id},
-        ).fetchone()
-
-    # Not found, not staff, or wrong password: same generic error
-    if not result or not bcrypt.checkpw(
-        request.password.encode("utf-8"),
-        result.password_hash.encode("utf-8"),
-    ):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-
-    token = jwt.encode(
-        {
-            "passenger_id": result.id,
-            "employee_no": result.employee_no,
-            "exp": datetime.now(timezone.utc) + timedelta(hours=24),
-        },
-        JWT_SECRET,
-        algorithm=JWT_ALGORITHM,
-    )
-
-    return {
-        "message": "Login successful",
-        "token": token,
-        "employee": {
-            "id": result.id,
-            "employee_no": result.employee_no,
-        },
-        "passenger": {
-            "id": result.id,
-            "email": result.email,
-            "full_name": result.full_name
-        }
-        
-    }
-
-@app.get("/me")
-def me(passenger_id: int = Depends(get_current_user_id)):
-    with engine.connect() as connection:
-        result = connection.execute(
-            text("SELECT id, email, full_name FROM passenger WHERE id = :id"),
-            {"id": passenger_id},
-        ).fetchone()
-    if not result:
-        raise HTTPException(status_code=404, detail="Passenger not found")
-    return {"id": result.id, "email": result.email, "full_name": result.full_name}
-
-class SignupRequest(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=8, max_length=72)
-    full_name: str = Field(min_length=1, max_length=150)
+# ==============================================================
+# 6. PAYMENTS (mock processor)
+# ==============================================================
 
 # ---------- Mock payment processor ----------
 
 PAYMENT_SECRET = JWT_SECRET + "-payments"  # separate key so payment tokens can't be used to log in
+
 
 TEST_CARDS = {
     "4000000000000002": "Your card was declined.",
@@ -502,6 +679,10 @@ def verify_payment_token(token: str, user_id: int) -> dict:
         raise HTTPException(status_code=402, detail="Payment does not match this account")
     return payload
 
+
+# ==============================================================
+# 7. BOOKINGS (create)
+# ==============================================================
 
 # ---------- Bookings ----------
 
@@ -624,6 +805,10 @@ def create_booking(req: BookingRequest, user_id: int = Depends(get_current_user_
     return {"message": "Booking confirmed", "bookings": created}
 
 
+# ==============================================================
+# 8. ACCOUNT PAGE & CANCELLATIONS
+# ==============================================================
+
 # ---------- Account page + cancellations ----------
 
 def refund_policy(total_cents: int, created_at: datetime, depart_at: datetime, now: datetime):
@@ -651,6 +836,7 @@ JOIN airport o ON o.code = f.origin
 WHERE ps.passenger_id = :uid AND ps.status = 'confirmed' AND f.depart_at >= now()
 ORDER BY f.depart_at, f.id, length(s.seat_no), s.seat_no
 """
+
 
 ACCOUNT_HISTORY_SQL = """
 SELECT f.id AS flight_id, f.flight_no, f.depart_at,
@@ -756,132 +942,53 @@ def cancel_bookings(req: CancelRequest, user_id: int = Depends(get_current_user_
 
     return {"message": "Cancelled", "cancelled": len(ids), "refund_cents": total_refund}
 
-@app.post("/signup")
-def signup(request: SignupRequest):
-    email = request.email.lower()
-    hashed_password = bcrypt.hashpw(
-        request.password.encode("utf-8"), bcrypt.gensalt()
-    ).decode("utf-8")
 
-    try:
-        with engine.begin() as connection:      # begin() = auto-commit
-            result = connection.execute(
-                text("""
-                    INSERT INTO passenger (email, password_hash, full_name)
-                    VALUES (:email, :password_hash, :full_name)
-                    RETURNING id, email, full_name
-                """),
-                {
-                    "email": email,
-                    "password_hash": hashed_password,
-                    "full_name": request.full_name,
-                },
-            ).fetchone()
-    except IntegrityError:
-        raise HTTPException(status_code=400, detail="Email already registered")
+# ==============================================================
+# 9. STAFF TOOLS (verify password, cancel/create flight, passenger list)
+# ==============================================================
 
-    return {
-        "message": "Signup successful",
-        "passenger": {"id": result.id, "email": result.email, "full_name": result.full_name},
-    }
+class PasswordVerificationRequest(BaseModel):
+    password: str
 
 
-
-# ---------- 1. All plane types ----------
-PLANES_SQL = """
-SELECT p.id, p.model, p.total_seats,
-       p.premium_fare_per_minute, p.standard_fare_per_minute, p.economy_fare_per_minute,
-       COUNT(s.id) FILTER (WHERE s.tier = 'premium')  AS premium_seats,
-       COUNT(s.id) FILTER (WHERE s.tier = 'standard') AS standard_seats,
-       COUNT(s.id) FILTER (WHERE s.tier = 'economy')  AS economy_seats
-FROM plane p
-LEFT JOIN seat s ON s.plane_id = p.id
-GROUP BY p.id
-ORDER BY p.model, p.id
-"""
-
-
-@app.get("/planes")
-def get_planes():
-    with engine.connect() as conn:
-        rows = conn.execute(text(PLANES_SQL)).mappings().all()
-    return [
-        {
-            "id": r["id"],
-            "model": r["model"],
-            "total_seats": r["total_seats"],
-            "seats_by_tier": {
-                "premium": r["premium_seats"],
-                "standard": r["standard_seats"],
-                "economy": r["economy_seats"],
-            },
-            "fare_per_minute": {
-                "premium": float(r["premium_fare_per_minute"]),
-                "standard": float(r["standard_fare_per_minute"]),
-                "economy": float(r["economy_fare_per_minute"]),
-            },
-        }
-        for r in rows
-    ]
-
-
-# ---------- 2. Fare calculator ----------
-FARE_CALC_SQL = """
-WITH t AS (
-    SELECT EXTRACT(EPOCH FROM (CAST(:arrive AS timestamptz) - CAST(:depart AS timestamptz))) / 60 AS mins
-)
-SELECT p.id, p.model, t.mins,
-       ROUND(t.mins * p.premium_fare_per_minute)  AS premium,
-       ROUND(t.mins * p.standard_fare_per_minute) AS standard,
-       ROUND(t.mins * p.economy_fare_per_minute)  AS economy
-FROM plane p, t
-WHERE p.id = :plane_id
-"""
-
-
-@app.get("/fares/calculate")
-def calculate_fares(plane_id: int, depart_at: datetime, arrive_at: datetime):
-    if arrive_at <= depart_at:
-        raise HTTPException(status_code=400, detail="arrive_at must be after depart_at")
-
-    with engine.connect() as conn:
-        r = conn.execute(
-            text(FARE_CALC_SQL),
-            {"plane_id": plane_id, "depart": depart_at, "arrive": arrive_at},
-        ).mappings().first()
-
-    if not r:
-        raise HTTPException(status_code=404, detail="Plane not found")
-
-    return {
-        "plane_id": r["id"],
-        "model": r["model"],
-        "duration_minutes": int(round(r["mins"])),
-        "fares_cents": {
-            "premium": int(r["premium"]),
-            "standard": int(r["standard"]),
-            "economy": int(r["economy"]),
-        },
-    }
-
-def require_staff(user_id: int = Depends(get_current_user_id)) -> int:
+@app.post("/employees/verify-password")
+def verify_employee_password(
+    request: PasswordVerificationRequest,
+    staff_id: int = Depends(require_staff)
+):
     with engine.connect() as conn:
         result = conn.execute(
             text("""
-                SELECT 1
-                FROM staff
-                WHERE passenger_id = :user_id
+                SELECT password_hash
+                FROM passenger
+                WHERE id = :id
             """),
-            {"user_id": user_id}
-        ).first()
+            {"id": staff_id}
+        ).mappings().first()
 
     if not result:
         raise HTTPException(
-            status_code=403,
-            detail="Staff access required"
+            status_code=401,
+            detail="Employee account not found."
         )
 
-    return user_id
+    password_matches = bcrypt.checkpw(
+        request.password.encode("utf-8"),
+        result["password_hash"].encode("utf-8")
+    )
+
+    if not password_matches:
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect password."
+        )
+
+    return {"verified": True}
+
+
+class FlightCancellationRequest(BaseModel):
+    password: str
+
 
 @app.post("/employees/flights/{flight_id}/cancel")
 def cancel_flight(
@@ -956,45 +1063,78 @@ def cancel_flight(
     }
 
 
-@app.post("/employees/verify-password")
-def verify_employee_password(
-    request: PasswordVerificationRequest,
-    staff_id: int = Depends(require_staff)
-):
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("""
-                SELECT password_hash
-                FROM passenger
-                WHERE id = :id
-            """),
-            {"id": staff_id}
-        ).mappings().first()
+class FlightCreate(BaseModel):
+    flight_no: str = Field(min_length=2, max_length=8)
+    plane_id: int
+    origin: str = Field(min_length=3, max_length=3)
+    destination: str = Field(min_length=3, max_length=3)
+    depart_at: datetime
+    arrive_at: datetime
 
-    if not result:
-        raise HTTPException(
-            status_code=401,
-            detail="Employee account not found."
-        )
 
-    password_matches = bcrypt.checkpw(
-        request.password.encode("utf-8"),
-        result["password_hash"].encode("utf-8")
-    )
+@app.post("/flights", status_code=201)
+def create_flight(body: FlightCreate, staff_id: int = Depends(require_staff)):
+    origin = body.origin.upper()
+    destination = body.destination.upper()
+    if origin == destination:
+        raise HTTPException(status_code=400, detail="Origin and destination must be different")
 
-    if not password_matches:
-        raise HTTPException(
-            status_code=401,
-            detail="Incorrect password."
-        )
+    try:
+        with engine.begin() as conn:
+            zones = {
+                r["code"]: r["timezone"]
+                for r in conn.execute(
+                    text("SELECT code, timezone FROM airport WHERE code IN (:o, :d)"),
+                    {"o": origin, "d": destination},
+                ).mappings()
+            }
+            if origin not in zones or destination not in zones:
+                raise HTTPException(status_code=400, detail="Unknown origin or destination airport")
 
-    return {"verified": True}
+            # Times without an offset are treated as local time at each airport
+            depart = body.depart_at if body.depart_at.tzinfo else \
+                body.depart_at.replace(tzinfo=ZoneInfo(zones[origin]))
+            arrive = body.arrive_at if body.arrive_at.tzinfo else \
+                body.arrive_at.replace(tzinfo=ZoneInfo(zones[destination]))
+            if arrive <= depart:
+                raise HTTPException(status_code=400, detail="Arrival must be after departure")
+
+            row = conn.execute(
+                text("""
+                    INSERT INTO flight (flight_no, plane_id, origin, destination, depart_at, arrive_at)
+                    VALUES (:flight_no, :plane_id, :origin, :destination, :depart_at, :arrive_at)
+                    RETURNING id, flight_no, plane_id, origin, destination, depart_at, arrive_at,
+                              status, premium_fare_cents, standard_fare_cents, economy_fare_cents
+                """),
+                {
+                    "flight_no": body.flight_no.upper(),
+                    "plane_id": body.plane_id,
+                    "origin": origin,
+                    "destination": destination,
+                    "depart_at": depart,
+                    "arrive_at": arrive,
+                },
+            ).mappings().first()
+    except IntegrityError as e:
+        sqlstate = getattr(e.orig, "sqlstate", None)
+        if sqlstate == "23503":
+            raise HTTPException(status_code=400, detail="Plane does not exist")
+        if sqlstate == "23505":
+            raise HTTPException(
+                status_code=409,
+                detail="A flight with this number and departure time already exists",
+            )
+        raise
+
+    return {"message": "Flight created", "flight": dict(row)}
+
 
 FLIGHT_HEADER_SQL = """
 SELECT id, flight_no, status, origin, destination, depart_at, arrive_at
 FROM flight
 WHERE id = :flight_id
 """
+
 
 MANIFEST_SQL = """
 SELECT ps.id AS booking_id, ps.booking_ref, ps.traveler_name, ps.status,
