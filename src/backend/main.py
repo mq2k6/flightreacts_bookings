@@ -204,12 +204,13 @@ FLIGHT_DETAIL_SQL = """
 SELECT f.id, f.flight_no, f.status, f.depart_at, f.arrive_at,
        f.premium_fare_cents, f.standard_fare_cents, f.economy_fare_cents,
        o.code AS from_code, o.city AS from_city, o.name AS from_airport, o.timezone AS from_tz,
-       d.code AS to_code,   d.city AS to_city,   d.name AS to_airport,   d.timezone AS to_tz,
-       p.model AS plane_model, p.total_seats
+       d.code AS to_code, d.city AS to_city, d.name AS to_airport, d.timezone AS to_tz,
+       p.model AS plane_model, p.total_seats,
+       p.seat_columns AS total_columns, p.seat_layout
 FROM flight f
 JOIN airport o ON o.code = f.origin
 JOIN airport d ON d.code = f.destination
-JOIN plane p   ON p.id = f.plane_id
+JOIN plane p ON p.id = f.plane_id
 WHERE f.id = :flight_id
 """
 
@@ -264,6 +265,8 @@ def get_flight(flight_id: int, user_id: int | None = Depends(get_optional_user_i
         "arrive_at": f["arrive_at"],
         "duration_minutes": int((f["arrive_at"] - f["depart_at"]).total_seconds() // 60),
         "plane": {"model": f["plane_model"], "total_seats": f["total_seats"]},
+        "seat_layout": f["seat_layout"],
+        "total_columns": f["total_columns"],
         "fares_cents": {
             "premium": f["premium_fare_cents"],
             "standard": f["standard_fare_cents"],
@@ -888,54 +891,3 @@ def delete_flight(flight_id: int, staff_id: int = Depends(require_staff)):
     return {"message": "Flight deleted", "flight_id": deleted.id, "flight_no": deleted.flight_no}
 
 
-
-SEAT_MAP_SQL = """
-SELECT p.id AS plane_id, p.model, p.seat_columns, p.seat_layout,
-       s.id AS seat_id, s.seat_no, s.tier
-FROM plane p
-JOIN seat s ON s.plane_id = p.id
-WHERE (CAST(:plane_id AS integer) IS NULL OR p.id = CAST(:plane_id AS integer))
-ORDER BY p.id, length(s.seat_no), s.seat_no
-"""
-
-
-@app.get("/planes/seat-maps")
-def get_seat_maps(plane_id: int | None = None):
-    with engine.connect() as conn:
-        rows = conn.execute(text(SEAT_MAP_SQL), {"plane_id": plane_id}).mappings().all()
-
-    planes = {}
-    for r in rows:
-        plane = planes.setdefault(r["plane_id"], {
-            "plane_id": r["plane_id"],
-            "model": r["model"],
-            "seat_columns": r["seat_columns"],
-            "seat_layout": r["seat_layout"],
-            "_rows": {},
-        })
-        seat_no = r["seat_no"]                  # e.g. "12A" -> row 12, column "A"
-        plane["_rows"].setdefault(int(seat_no[:-1]), []).append({
-            "id": r["seat_id"],
-            "seat_no": seat_no,
-            "column": seat_no[-1],
-            "tier": r["tier"],
-        })
-
-    result = []
-    for plane in planes.values():
-        by_row = plane.pop("_rows")
-        plane["rows"] = [
-            {"row": n, "seats": sorted(by_row[n], key=lambda s: s["column"])}
-            for n in sorted(by_row)
-        ]
-        letters = sorted({s["column"] for row in plane["rows"] for s in row["seats"]})
-        groups, i = [], 0
-        for size in (plane["seat_layout"] or [len(letters)]):
-            groups.append(letters[i:i + size])
-            i += size
-        plane["column_groups"] = groups
-        result.append(plane)
-
-    if plane_id is not None and not result:
-        raise HTTPException(status_code=404, detail="Plane not found")
-    return result

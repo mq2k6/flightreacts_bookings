@@ -30,12 +30,12 @@ interface Traveler {
 }
 
 const TAX_PERCENT = 14;
-const BAG_CENTS = 1500;
+const BAG_PRICE = 15;
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 const money = (cents: number) =>
-  cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
+  cents  === 0 ? `$${cents }` : `$${(cents ).toFixed(2)}`;
 
 // Integer math so the frontend and backend always round the same way
 const taxFor = (fareCents: number) =>
@@ -160,7 +160,7 @@ export default function Confirm_Booking() {
   const fareTotal = selectedSeats.reduce((sum, s) => sum + s.fare_cents, 0);
   const taxTotal = selectedSeats.reduce((sum, s) => sum + taxFor(s.fare_cents), 0);
   const bagCount = selectedSeats.filter((s) => getTraveler(s.seat_no).bag).length;
-  const bagTotal = bagCount * BAG_CENTS;
+  const bagTotal = bagCount * BAG_PRICE;
   const grandTotal = fareTotal + taxTotal + bagTotal;
 
   function handleLogout() {
@@ -368,7 +368,7 @@ export default function Confirm_Booking() {
                       onChange={(e) => updateTraveler(seat.seat_no, { bag: e.target.checked })}
                       className="accent-[#5C339E]"
                     />
-                    Add a checked bag (+{money(BAG_CENTS)})
+                    Add a checked bag (+{money(BAG_PRICE)})
                   </label>
                 </div>
               );

@@ -2,7 +2,7 @@
 import { useState, useEffect, type FormEvent } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import FlightCard, { type Flight } from "../components/FlightCard";
-import { getUserId, getEmployeeId } from "../utils/auth";
+import { getUserId, getEmployeeId, getAdmin } from "../utils/auth";
 
 type Plane = {
   id: number;
@@ -39,7 +39,7 @@ export default function HomePage() {
   const [minutes, setMinutes] = useState("");
   const [directOnly, setDirectOnly] = useState(true);
   const [seatTier, setSeatTier] = useState("Any");
-  const [admin, setAdmin] = useState(false);
+  const [admin, setAdmin] = useState(getAdmin());  
   const userId = getUserId();
   const employeeId =getEmployeeId();
   const navigate = useNavigate();
@@ -180,6 +180,7 @@ useEffect(() => {
   localStorage.removeItem("token");
   localStorage.removeItem("passenger");
   localStorage.removeItem("employee");
+  localStorage.setItem("admin", "false");
   console.log(getEmployeeId())
   navigate("/login");
 }
@@ -276,7 +277,10 @@ function handleSubmit(e: FormEvent<HTMLFormElement>) {
 
             {employeeId!=null && admin==false && <button
             type="button"
-            onClick={() => { setAdmin(true)}}
+            onClick={() => {
+              localStorage.setItem("admin", "true");
+              setAdmin(true);
+            }}
             className="hover:text-[#5C339E]"
             >
             Admin Mode
@@ -284,7 +288,10 @@ function handleSubmit(e: FormEvent<HTMLFormElement>) {
 
             {employeeId!=null && admin==true && <button
             type="button"
-            onClick={() => { setAdmin(false)}}
+            onClick={() => {
+              localStorage.setItem("admin", "false");
+              setAdmin(false);
+            }}
             className="hover:text-[#5C339E]"
             >
             Exit Admin Mode
@@ -299,7 +306,7 @@ function handleSubmit(e: FormEvent<HTMLFormElement>) {
             </button>
 
         </nav>
-        </div>
+      </div>
 
       {/* Main Content */}
       <div className="flex py-4 px-5 flex-col items-start gap-2.5 w-full">
@@ -481,9 +488,9 @@ function handleSubmit(e: FormEvent<HTMLFormElement>) {
               >
                 <option>Any</option>
                 <option>Economy</option>
+                <option>Standard</option>
                 <option>Premium</option>
-                <option>Business</option>
-                <option>First</option>
+
               </select>
             </label>
 

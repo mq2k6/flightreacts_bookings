@@ -15,3 +15,7 @@ export function getEmployeeId(): number | null {
     return null;
   }
 }
+
+export function getAdmin(): boolean {
+  return localStorage.getItem("admin") === "true";
+}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getUserId, getEmployeeId } from "../utils/auth";
+import { getUserId, getEmployeeId, getAdmin } from "../utils/auth";
 
 type Tier = "premium" | "standard" | "economy";
 
@@ -27,6 +27,10 @@ interface FlightDetails {
   fares_cents: Record<Tier, number>;
   seats: Seat[];
   my_bookings: MyBooking[];
+
+  // Plane seating configuration
+  seat_layout: number[];
+  total_columns: number;
 }
 
 interface MyBooking {
@@ -46,7 +50,7 @@ const TIERS: { key: Tier; label: string; location: string }[] = [
   { key: "economy", label: "Economy", location: "Back" },
 ];
 
-const dollars = (cents: number) => `$${(cents / 100).toFixed(0)}`;
+const dollars = (amount: number) => `$${amount.toFixed(2)}`;
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // Sort seat numbers like 1A, 1B, ... 2A, ... 12F
@@ -80,6 +84,8 @@ export default function Flight_Details() {
   const navigate = useNavigate();
   const userId = getUserId();
   const employeeId= getEmployeeId();
+  const [admin, setAdmin] = useState(getAdmin());  
+
   const [flight, setFlight] = useState<FlightDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -171,10 +177,65 @@ useEffect(() => {
   const selectedSeats = openSeats.filter((s) =>
     selectedSeatIds.includes(s.id)
   );
+
+  // Map actual seats by their seat number (e.g. "1A", "1B")
+const seatMap = useMemo(
+  () =>
+    new Map<string, Seat>(
+      (flight?.seats ?? []).map(
+        (seat): [string, Seat] => [seat.seat_no, seat]
+      )
+    ),
+  [flight]
+);
+
+const seatRows = useMemo(
+  () =>
+    [...new Set(
+      (flight?.seats ?? []).map((seat) => parseInt(seat.seat_no, 10))
+    )].sort((a, b) => a - b),
+  [flight]
+);
+
+  // Generate the seat column letters and divide them into aisle-separated groups
+const seatGroups = useMemo(() => {
+  if (!flight) return [];
+
+  const widths = [...(flight.seat_layout ?? [])];
+  const totalColumns = flight.total_columns ?? 0;
+
+  const layoutTotal = widths.reduce((sum, width) => sum + width, 0);
+
+  if (layoutTotal < totalColumns) {
+    widths.push(totalColumns - layoutTotal);
+  }
+
+  let columnIndex = 0;
+
+  // Skip column I because aircraft do not use it
+  const getColumnLetter = () => {
+    const letter = String.fromCharCode(65 + columnIndex);
+    columnIndex++;
+
+    if (letter === "I") {
+      return getColumnLetter();
+    }
+
+    return letter;
+  };
+
+  return widths
+    .filter((width) => width > 0)
+    .map((groupSize) =>
+      Array.from({ length: groupSize }, getColumnLetter)
+    );
+}, [flight]);
+
   function handleLogout() {
     localStorage.removeItem("token");
     localStorage.removeItem("passenger");
-    localStorage.removeItem("employee")
+    localStorage.removeItem("employee");
+    localStorage.setItem("admin", "false")
     navigate("/login");
   }
   function handleSeatToggle(seatId: number) {
@@ -267,11 +328,34 @@ async function handleConfirmCancellation(e: React.FormEvent<HTMLFormElement>) {
           <Link to={`/account/${userId}`} className="hover:text-[#5C339E]">
             My Account
           </Link>
+          {employeeId!=null && admin==false && <button
+            type="button"
+            onClick={() => {
+              localStorage.setItem("admin", "true");
+              setAdmin(true);
+            }}
+            className="hover:text-[#5C339E]"
+            >
+            Admin Mode
+            </button>}
+
+            {employeeId!=null && admin==true && <button
+            type="button"
+            onClick={() => {
+              localStorage.setItem("admin", "false");
+              setAdmin(false);
+            }}
+            className="hover:text-[#5C339E]"
+            >
+            Exit Admin Mode
+            </button>}
           <button type="button" onClick={handleLogout} className="hover:text-[#5C339E]">
             Log out
           </button>
         </nav>
       </div>
+      
+      
 
       {/* Main Content */}
 <div className="flex py-4 px-5 flex-col items-start gap-3 w-full max-w-[1400px] mx-auto">        {loading ? (
@@ -386,66 +470,177 @@ async function handleConfirmCancellation(e: React.FormEvent<HTMLFormElement>) {
                 </p>
 
                 <p className="text-[#737373] font-inter text-[10px]">
-                  Price depends on where the seat is in the plane. Choose an open seat
-                  from the list.
+                  Price depends on where the seat is in the plane. Click an open seat
+                  on the map to choose it.
                 </p>
 
-                 {employeeId !== null && (
+                {selectedSeats.length > 0 && (
+                  <p className="text-[#804DD9] font-inter text-[11px] font-bold">
+                    Selected: {selectedSeats.map((seat) => seat.seat_no).join(", ")}
+                    {" · "}
+                    {selectedSeats.map((seat) => capitalize(seat.tier)).join(", ")}
+                    {" · "}
+                    {dollars(selectedSeats.reduce((total, seat) => total + seat.fare_cents, 0))}
+                  </p>
+                )}
+
+                {!admin && (
+                  <button
+                    type="button"
+                    onClick={handleContinue}
+                    disabled={selectedSeats.length === 0}
+                    className="cursor-pointer flex py-[7px] px-3.5 justify-center items-center rounded bg-[#5C339E] text-white font-inter text-[11px] font-bold hover:bg-[#48277D] disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Continue to booking
+                  </button>
+                )}
+
+                {/* Keep employee cancellation functionality */}
+                {employeeId !== null && admin && (
                   <button
                     type="button"
                     onClick={handleCancelClick}
-                    className="cursor-pointer flex w-full py-[7px] px-3.5 justify-center items-center rounded bg-red-600 text-white font-inter text-[11px] font-bold hover:bg-red-800"
+                    className="cursor-pointer flex py-[7px] px-3.5 justify-center items-center rounded bg-[red] text-white font-inter text-[11px] font-bold hover:bg-[maroon] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Cancel Flight
                   </button>
                 )}
               </div>
 
-              {/* RIGHT: seat selection + continue */}
+              {/* RIGHT: visual seat map */}
               <div className="flex flex-col items-start gap-2 w-full md:w-[300px] md:shrink-0 rounded-lg border border-[#D1C7EB] bg-white p-3">
-                <span className="text-[#2E2E2E] font-inter text-xs font-bold">Select seats</span>
 
-                <div className="flex flex-col gap-1 w-full rounded border border-[#D1C7EB] bg-white p-2 max-h-[260px] overflow-y-auto">
-                  {openSeats.map((seat) => (
-                    <label
-                      key={seat.id}
-                      className="flex items-center justify-between gap-2 rounded px-2 py-2 cursor-pointer hover:bg-[#F2EDFC]"
-                    >
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={selectedSeatIds.includes(seat.id)}
-                          onChange={() => handleSeatToggle(seat.id)}
-                          className="accent-[#5C339E]"
-                        />
-                        <span className="text-[#2E2E2E] font-inter text-[11px]">
-                          Seat {seat.seat_no} · {capitalize(seat.tier)}
-                        </span>
+                <span className="text-[#2E2E2E] font-inter text-xs font-bold">
+                  Seat map
+                </span>
+
+                <div className="w-full flex flex-col items-center gap-2">
+
+                  {/* Front of plane */}
+                  <div className="flex items-center gap-1 text-[#737373] font-inter text-[10px]">
+                    <span>▲</span>
+                    <span>Front of plane</span>
+                  </div>
+
+                  {/* Column letters */}
+                  <div className="flex flex-col gap-1 w-full">
+
+                    <div className="flex items-center gap-1">
+                      <div className="w-5 shrink-0" />
+
+                      <div className="flex flex-1 justify-center gap-4">
+                        {seatGroups.map((group, groupIndex) => (
+                          <div key={groupIndex} className="flex gap-1">
+                            {group.map((letter) => (
+                              <div
+                                key={letter}
+                                className="w-5 text-center text-[#737373] font-inter text-[9px]"
+                              >
+                                {letter}
+                              </div>
+                            ))}
+                          </div>
+                        ))}
                       </div>
+                    </div>
 
-                      <span className="text-[#737373] font-inter text-[10px]">
-                        {dollars(seat.fare_cents)}
-                      </span>
-                    </label>
-                  ))}
+                    {/* Actual seat rows */}
+                    {seatRows.map((row) => (
+                      <div key={row} className="flex items-center gap-1">
+
+                        {/* Row number */}
+                        <span className="w-5 shrink-0 text-right text-[#737373] font-inter text-[9px]">
+                          {row}
+                        </span>
+
+                        {/* Seat groups with aisles */}
+                        <div className="flex flex-1 justify-center gap-4">
+
+                          {seatGroups.map((group, groupIndex) => (
+                            <div key={groupIndex} className="flex gap-1">
+
+                              {group.map((letter) => {
+                                const seat = seatMap.get(`${row}${letter}`);
+
+                                // Leave a blank space when this seat position doesn't exist
+                                if (!seat) {
+                                  return (
+                                    <div
+                                      key={letter}
+                                      className="w-5 h-5 shrink-0"
+                                    />
+                                  );
+                                }
+
+                                const selected = selectedSeatIds.includes(seat.id);
+
+                                let seatStyle = "";
+
+                                if (selected) {
+                                  seatStyle = "bg-pink-500 border-pink-500";
+                                } else if (seat.taken) {
+                                  seatStyle = "bg-white border-[#D1C7EB]";
+                                } else if (seat.tier === "premium") {
+                                  seatStyle = "bg-[#452078] border-[#452078]";
+                                } else if (seat.tier === "standard") {
+                                  seatStyle = "bg-[#9872D1] border-[#9872D1]";
+                                } else {
+                                  seatStyle = "bg-[#DCCFF5] border-[#DCCFF5]";
+                                }
+
+                                return (
+                                  <button
+                                    key={seat.id}
+                                    type="button"
+                                    title={`Seat ${seat.seat_no} · ${capitalize(seat.tier)} · ${dollars(seat.fare_cents)}`}
+                                    disabled={seat.taken || admin}
+                                    onClick={() => handleSeatToggle(seat.id)}
+                                    className={`w-5 h-5 shrink-0 rounded-[3px] border ${seatStyle}
+                                      ${!seat.taken && !admin ? "cursor-pointer hover:ring-2 hover:ring-[#804DD9]" : ""}
+                                      ${seat.taken || admin ? "cursor-default" : ""}
+                                    `}
+                                  />
+                                );
+                              })}
+
+                            </div>
+                          ))}
+
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Legend */}
+                  <div className="flex flex-col gap-1 w-full mt-2">
+
+                    <div className="flex items-center gap-2 text-[#444] font-inter text-[10px]">
+                      <div className="w-3 h-3 rounded-[3px] bg-[#452078]" />
+                      Premium {dollars(flight.fares_cents.premium)}
+                    </div>
+
+                    <div className="flex items-center gap-2 text-[#444] font-inter text-[10px]">
+                      <div className="w-3 h-3 rounded-[3px] bg-[#9872D1]" />
+                      Standard {dollars(flight.fares_cents.standard)}
+                    </div>
+
+                    <div className="flex items-center gap-2 text-[#444] font-inter text-[10px]">
+                      <div className="w-3 h-3 rounded-[3px] bg-[#DCCFF5]" />
+                      Economy {dollars(flight.fares_cents.economy)}
+                    </div>
+
+                    <div className="flex items-center gap-2 text-[#444] font-inter text-[10px]">
+                      <div className="w-3 h-3 rounded-[3px] border border-[#D1C7EB] bg-white" />
+                      Taken
+                    </div>
+
+                    <div className="flex items-center gap-2 text-[#444] font-inter text-[10px]">
+                      <div className="w-3 h-3 rounded-[3px] bg-pink-500" />
+                      Your seat
+                    </div>
+
+                  </div>
                 </div>
-
-                <p className="text-[#804DD9] font-inter text-[11px] font-bold">
-                  {selectedSeats.length} seat(s) selected
-                  {selectedSeats.length > 0 &&
-                    `: ${selectedSeats.map((seat) => seat.seat_no).join(", ")}`}
-                </p>
-
-                <button
-                  type="button"
-                  onClick={handleContinue}
-                  disabled={selectedSeats.length === 0}
-                  className="cursor-pointer flex w-full py-[7px] px-3.5 justify-center items-center rounded bg-[#5C339E] text-white font-inter text-[11px] font-bold hover:bg-[#48277D] disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Continue to booking
-                </button>
-
-               
               </div>
             </div>
           </>

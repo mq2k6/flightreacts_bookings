@@ -7,10 +7,10 @@ import SignUp from "./pages/SignUp";
 import Account from "./pages/Account"
 import Flight_Details from "./pages/Flight_Details"
 import Confirm_Booking from "./pages/Confirm_Booking"
-import { useState } from "react";
+
 
 export default function App() {
-  const [user, setUser]= useState(null)
+
   return (
     <BrowserRouter>
       <Routes>
