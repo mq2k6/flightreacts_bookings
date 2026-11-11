@@ -13,6 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import create_engine, text, bindparam
 from sqlalchemy.exc import IntegrityError
+from Zoneinfo import ZoneInfo
 
 # Load .env from the same directory as main.py
 load_dotenv()
@@ -1052,3 +1053,69 @@ def get_flight_passengers(
             for r in rows
         ],
     }
+
+
+class FlightCreate(BaseModel):
+    flight_no: str = Field(min_length=2, max_length=8)
+    plane_id: int
+    origin: str = Field(min_length=3, max_length=3)
+    destination: str = Field(min_length=3, max_length=3)
+    depart_at: datetime
+    arrive_at: datetime
+
+
+@app.post("/flights", status_code=201)
+def create_flight(body: FlightCreate, staff_id: int = Depends(require_staff)):
+    origin = body.origin.upper()
+    destination = body.destination.upper()
+    if origin == destination:
+        raise HTTPException(status_code=400, detail="Origin and destination must be different")
+
+    try:
+        with engine.begin() as conn:
+            zones = {
+                r["code"]: r["timezone"]
+                for r in conn.execute(
+                    text("SELECT code, timezone FROM airport WHERE code IN (:o, :d)"),
+                    {"o": origin, "d": destination},
+                ).mappings()
+            }
+            if origin not in zones or destination not in zones:
+                raise HTTPException(status_code=400, detail="Unknown origin or destination airport")
+
+            # Times without an offset are treated as local time at each airport
+            depart = body.depart_at if body.depart_at.tzinfo else \
+                body.depart_at.replace(tzinfo=ZoneInfo(zones[origin]))
+            arrive = body.arrive_at if body.arrive_at.tzinfo else \
+                body.arrive_at.replace(tzinfo=ZoneInfo(zones[destination]))
+            if arrive <= depart:
+                raise HTTPException(status_code=400, detail="Arrival must be after departure")
+
+            row = conn.execute(
+                text("""
+                    INSERT INTO flight (flight_no, plane_id, origin, destination, depart_at, arrive_at)
+                    VALUES (:flight_no, :plane_id, :origin, :destination, :depart_at, :arrive_at)
+                    RETURNING id, flight_no, plane_id, origin, destination, depart_at, arrive_at,
+                              status, premium_fare_cents, standard_fare_cents, economy_fare_cents
+                """),
+                {
+                    "flight_no": body.flight_no.upper(),
+                    "plane_id": body.plane_id,
+                    "origin": origin,
+                    "destination": destination,
+                    "depart_at": depart,
+                    "arrive_at": arrive,
+                },
+            ).mappings().first()
+    except IntegrityError as e:
+        sqlstate = getattr(e.orig, "sqlstate", None)
+        if sqlstate == "23503":
+            raise HTTPException(status_code=400, detail="Plane does not exist")
+        if sqlstate == "23505":
+            raise HTTPException(
+                status_code=409,
+                detail="A flight with this number and departure time already exists",
+            )
+        raise
+
+    return {"message": "Flight created", "flight": dict(row)}
