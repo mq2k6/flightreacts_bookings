@@ -52,7 +52,7 @@ const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 function lowestFare(fares?: Flight["fares_cents"]) {
   if (!fares) return null;
   const values = Object.values(fares).filter((v) => typeof v === "number");
-  return values.length ? Math.min(...values) / 100 : null;
+  return values.length ? Math.min(...values)  : null;
 }
 
 

@@ -301,7 +301,7 @@ async function handleConfirmCancellation(e: React.FormEvent<HTMLFormElement>) {
     const data = await response.json();
 
     if (!response.ok) {
-      setCancelError(data.detail || "Incorrect password or cancellation failed.");
+      setCancelError(data.detail || "Flight cancellation failed.");
       return;
     }
 
