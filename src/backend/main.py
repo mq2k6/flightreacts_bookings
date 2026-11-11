@@ -4,7 +4,7 @@ import secrets
 import string
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated
-from Zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo
 
 import bcrypt
 import jwt
