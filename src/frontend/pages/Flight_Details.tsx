@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getUserId } from "../utils/auth";
+import { getUserId, getEmployeeId } from "../utils/auth";
 
 type Tier = "premium" | "standard" | "economy";
 
@@ -79,12 +79,19 @@ export default function Flight_Details() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const userId = getUserId();
+  const employeeId= getEmployeeId();
   const [flight, setFlight] = useState<FlightDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selectedSeatIds, setSelectedSeatIds] = useState<number[]>([]);
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelPassword, setCancelPassword] = useState("");
+  const [cancelError, setCancelError] = useState("");
+  const [cancelling, setCancelling] = useState(false);
 
 useEffect(() => {
+  
+
   async function loadFlight() {
     const token = localStorage.getItem("token");
 
@@ -167,6 +174,7 @@ useEffect(() => {
   function handleLogout() {
     localStorage.removeItem("token");
     localStorage.removeItem("passenger");
+    localStorage.removeItem("employee")
     navigate("/login");
   }
   function handleSeatToggle(seatId: number) {
@@ -193,6 +201,59 @@ useEffect(() => {
       rows: rows.length ? [Math.min(...rows), Math.max(...rows)] : null,
     };
   }
+
+
+  function handleCancelClick() {
+  setCancelPassword("");
+  setCancelError("");
+  setShowCancelModal(true);
+}
+
+async function handleConfirmCancellation(e: React.FormEvent<HTMLFormElement>) {
+  e.preventDefault();
+
+  const token = localStorage.getItem("token");
+
+  if (!token || !flight) {
+    navigate("/login");
+    return;
+  }
+
+  setCancelling(true);
+  setCancelError("");
+
+  try {
+    const response = await fetch(
+      `http://localhost:8000/employees/flights/${flight.id}/cancel`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          password: cancelPassword,
+        }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      setCancelError(data.detail || "Incorrect password or cancellation failed.");
+      return;
+    }
+
+    setShowCancelModal(false);
+    navigate("/home");
+
+  } catch (error) {
+    console.error("Error cancelling flight:", error);
+    setCancelError("Unable to cancel flight. Please try again.");
+  } finally {
+    setCancelling(false);
+  }
+}
 
   return (
     <div className="flex flex-col items-start rounded-lg border border-[#D1C7EB] bg-white min-h-screen w-full overflow-hidden">
@@ -328,6 +389,16 @@ useEffect(() => {
                   Price depends on where the seat is in the plane. Choose an open seat
                   from the list.
                 </p>
+
+                 {employeeId !== null && (
+                  <button
+                    type="button"
+                    onClick={handleCancelClick}
+                    className="cursor-pointer flex w-full py-[7px] px-3.5 justify-center items-center rounded bg-red-600 text-white font-inter text-[11px] font-bold hover:bg-red-800"
+                  >
+                    Cancel Flight
+                  </button>
+                )}
               </div>
 
               {/* RIGHT: seat selection + continue */}
@@ -373,11 +444,73 @@ useEffect(() => {
                 >
                   Continue to booking
                 </button>
+
+               
               </div>
             </div>
           </>
         )}
       </div>
+      {showCancelModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+
+          <h2 className="text-[#2E2E2E] font-inter text-lg font-bold">
+            Confirm Flight Cancellation
+          </h2>
+
+          <p className="mt-2 text-[#737373] font-inter text-sm">
+            Enter your employee password to confirm cancellation of flight{" "}
+            <strong>{flight?.flight_no}</strong>.
+          </p>
+
+          <form
+            onSubmit={handleConfirmCancellation}
+            className="mt-5 flex flex-col gap-3"
+          >
+            <label className="flex flex-col gap-1 text-[#2E2E2E] font-inter text-xs font-bold">
+              Employee Password
+
+              <input
+                type="password"
+                required
+                value={cancelPassword}
+                onChange={(e) => setCancelPassword(e.target.value)}
+                placeholder="Enter your password"
+                className="w-full rounded-md border border-[#D1C7EB] px-3 py-2 text-sm font-normal outline-none focus:border-[#5C339E]"
+              />
+            </label>
+
+            {cancelError && (
+              <p className="text-red-600 font-inter text-xs">
+                {cancelError}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2 mt-2">
+
+              <button
+                type="button"
+                onClick={() => setShowCancelModal(false)}
+                disabled={cancelling}
+                className="rounded-md border border-[#D1C7EB] px-4 py-2 text-xs font-bold text-[#2E2E2E] hover:bg-gray-100"
+              >
+                Go Back
+              </button>
+
+              <button
+                type="submit"
+                disabled={cancelling || !cancelPassword}
+                className="rounded-md bg-red-600 px-4 py-2 text-xs font-bold text-white hover:bg-red-800 disabled:opacity-50"
+              >
+                {cancelling ? "Cancelling..." : "Confirm Cancellation"}
+              </button>
+
+            </div>
+          </form>
+        </div>
+      </div>
+    )}
     </div>
   );
 }

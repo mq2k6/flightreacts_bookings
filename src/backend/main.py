@@ -356,7 +356,7 @@ def employee_login(request: EmployeeLoginRequest):
         result = connection.execute(
             text("""
                 SELECT p.id, p.password_hash,
-                       s.employee_no
+                       s.employee_no, p.email, p.full_name
                 FROM passenger p
                 JOIN staff s ON s.passenger_id = p.id
                 WHERE s.employee_no = :empId
@@ -388,6 +388,12 @@ def employee_login(request: EmployeeLoginRequest):
             "id": result.id,
             "employee_no": result.employee_no,
         },
+        "passenger": {
+            "id": result.id,
+            "email": result.email,
+            "full_name": result.full_name
+        }
+        
     }
 
 @app.get("/me")

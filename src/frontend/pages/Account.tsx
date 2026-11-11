@@ -76,6 +76,7 @@ export default function Account() {
   function handleLogout() {
     localStorage.removeItem("token");
     localStorage.removeItem("passenger");
+    localStorage.removeItem("employee")
     navigate("/login");
   }
 

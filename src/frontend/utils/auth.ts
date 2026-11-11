@@ -6,3 +6,12 @@ export function getUserId(): number | null {
     return null;
   }
 }
+
+export function getEmployeeId(): number | null {
+  try {
+    const employee = JSON.parse(localStorage.getItem("employee") ?? "null");
+    return employee?.id ?? null;
+  } catch {
+    return null;
+  }
+}

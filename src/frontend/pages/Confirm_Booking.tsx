@@ -166,6 +166,7 @@ export default function Confirm_Booking() {
   function handleLogout() {
     localStorage.removeItem("token");
     localStorage.removeItem("passenger");
+    localStorage.removeItem("employee")
     navigate("/login");
   }
   function handleAccount(id: string) {

@@ -41,6 +41,10 @@ export default function Emp_LogIn() {
         "passenger",
         JSON.stringify(data.passenger)
       );
+      localStorage.setItem(
+        "employee",
+        JSON.stringify(data.employee)
+      );
       navigate("/home");
 
     } catch (error) {

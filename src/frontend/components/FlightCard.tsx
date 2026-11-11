@@ -1,3 +1,7 @@
+import { useState, useEffect } from "react";
+import { getEmployeeId } from "../utils/auth";
+
+
 export interface Flight {
   // search results use `id`; upcoming bookings use `flight_id` + `booking_id`
   id?: number;
@@ -51,7 +55,24 @@ function lowestFare(fares?: Flight["fares_cents"]) {
   return values.length ? Math.min(...values) / 100 : null;
 }
 
+
 export default function FlightCard({ flight, type, onAction }: FlightCardProps) {
+  const [employeeId, setEmployeeId] = useState<number | null>(getEmployeeId());
+
+  useEffect(() => {
+    const updateEmployeeId = () => {
+      setEmployeeId(getEmployeeId());
+    };
+
+    window.addEventListener("storage", updateEmployeeId);
+    window.addEventListener("authChanged", updateEmployeeId);
+
+    return () => {
+      window.removeEventListener("storage", updateEmployeeId);
+      window.removeEventListener("authChanged", updateEmployeeId);
+    };
+  }, []);
+
   const details = [
     formatDate(flight.depart_at),
     `${formatTime(flight.depart_at)} → ${formatTime(flight.arrive_at)}`,
@@ -87,13 +108,27 @@ if (seats.length > 0) {
         </p>
       </div>
 
+      <div className="flex items-center gap-2 ml-auto shrink-0">
       <button
         type="button"
         onClick={() => flightId !== undefined && onAction(flightId)}
-        className="cursor-pointer shrink-0 rounded-md border border-[#D1C7EB] bg-white px-4 py-2 text-[#2E2E2E] font-inter text-xs font-bold hover:bg-[#F2EDFC]"
+        className="cursor-pointer rounded-md border border-[#D1C7EB] bg-white px-4 py-2 text-[#2E2E2E] font-inter text-xs font-bold hover:bg-[#F2EDFC]"
       >
-        {"View details"}
+        View details
       </button>
+
+      {employeeId != null && (
+        <button
+          type="button"
+          onClick={() => flightId !== undefined && onAction(flightId)} //NEED TO CHANGE ACTION
+          className="cursor-pointer rounded-md border border-[#D1C7EB] bg-white px-4 py-2 text-[#2E2E2E] font-inter text-xs font-bold hover:bg-[#F2EDFC]"
+        >
+          Passenger List
+        </button>
+      )}
+    </div>
+
     </div>
   );
 }
+

@@ -2,7 +2,7 @@
 import { useState, useEffect, type FormEvent } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import FlightCard, { type Flight } from "../components/FlightCard";
-import { getUserId } from "../utils/auth";
+import { getUserId, getEmployeeId } from "../utils/auth";
 
 
 function groupByFlight(rows: Flight[]): Flight[] {
@@ -35,6 +35,7 @@ export default function HomePage() {
   const [seatTier, setSeatTier] = useState("Any");
 
   const userId = getUserId();
+  const employeeId =getEmployeeId();
   const navigate = useNavigate();
 
   const [searchSubmitted, setsearchSubmitted] = useState(false);
@@ -139,7 +140,8 @@ useEffect(() => {
   function handleLogout() {
   localStorage.removeItem("token");
   localStorage.removeItem("passenger");
-
+  localStorage.removeItem("employee");
+  console.log(getEmployeeId())
   navigate("/login");
 }
 function handleAccount(id: string) {
@@ -148,6 +150,7 @@ function handleAccount(id: string) {
 function handleViewDetails(id: number) {
   navigate(`/flight-details/${id}`);
 }
+
 
 
   return (
@@ -169,7 +172,7 @@ function handleViewDetails(id: number) {
 
             <button
             type="button"
-            onClick={() => { if(userId!=null) {handleAccount(userId)}}}
+            onClick={() => { if(userId!=null) {handleAccount(String(userId))}}}
             className="hover:text-[#5C339E]"
             >
             My Account
