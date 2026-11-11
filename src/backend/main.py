@@ -75,6 +75,11 @@ class EmployeeLoginRequest(BaseModel):
     empId: str
     password: str
 
+class PasswordVerificationRequest(BaseModel):
+    password: str
+
+class FlightCancellationRequest(BaseModel):
+    password: str
 
 FLIGHT_SQL = """
 SELECT f.id, f.flight_no,
@@ -859,35 +864,191 @@ def calculate_fares(plane_id: int, depart_at: datetime, arrive_at: datetime):
         },
     }
 
-
-# ---------- 3. Delete a flight (staff only) ----------
 def require_staff(user_id: int = Depends(get_current_user_id)) -> int:
     with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT 1 FROM staff WHERE passenger_id = :id"), {"id": user_id}
-        ).fetchone()
-    if not row:
-        raise HTTPException(status_code=403, detail="Staff only")
-    return user_id
+        result = conn.execute(
+            text("""
+                SELECT 1
+                FROM staff
+                WHERE passenger_id = :user_id
+            """),
+            {"user_id": user_id}
+        ).first()
 
-
-@app.delete("/flights/{flight_id}")
-def delete_flight(flight_id: int, staff_id: int = Depends(require_staff)):
-    try:
-        with engine.begin() as conn:
-            deleted = conn.execute(
-                text("DELETE FROM flight WHERE id = :id RETURNING id, flight_no"),
-                {"id": flight_id},
-            ).fetchone()
-    except IntegrityError:
+    if not result:
         raise HTTPException(
-            status_code=409,
-            detail="Flight has bookings and can't be deleted. Cancel it instead.",
+            status_code=403,
+            detail="Staff access required"
         )
 
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Flight not found")
+    return user_id
 
-    return {"message": "Flight deleted", "flight_id": deleted.id, "flight_no": deleted.flight_no}
+@app.post("/employees/flights/{flight_id}/cancel")
+def cancel_flight(
+    flight_id: int,
+    request: FlightCancellationRequest,
+    staff_id: int = Depends(require_staff)
+):
+    # Verify the flight exists
+    with engine.begin() as conn:
+        flight = conn.execute(
+            text("""
+                SELECT id, status
+                FROM flight
+                WHERE id = :flight_id
+            """),
+            {"flight_id": flight_id}
+        ).mappings().first()
+
+        if not flight:
+            raise HTTPException(
+                status_code=404,
+                detail="Flight not found."
+            )
+
+        if flight["status"].lower() == "cancelled":
+            raise HTTPException(
+                status_code=400,
+                detail="This flight is already cancelled."
+            )
+
+        # Retrieve the authenticated employee's password hash
+        employee = conn.execute(
+            text("""
+                SELECT password_hash
+                FROM passenger
+                WHERE id = :id
+            """),
+            {"id": staff_id}
+        ).mappings().first()
+
+        if not employee:
+            raise HTTPException(
+                status_code=401,
+                detail="Employee account not found."
+            )
+
+        password_matches = bcrypt.checkpw(
+            request.password.encode("utf-8"),
+            employee["password_hash"].encode("utf-8")
+        )
+
+        if not password_matches:
+            raise HTTPException(
+                status_code=401,
+                detail="Incorrect password."
+            )
+
+        # Update the status without deleting the flight or its bookings
+        conn.execute(
+            text("""
+                UPDATE flight
+                SET status = 'cancelled'
+                WHERE id = :flight_id
+            """),
+            {"flight_id": flight_id}
+        )
+
+    return {
+        "message": "Flight successfully cancelled.",
+        "flight_id": flight_id,
+        "status": "cancelled"
+    }
 
 
+@app.post("/employees/verify-password")
+def verify_employee_password(
+    request: PasswordVerificationRequest,
+    staff_id: int = Depends(require_staff)
+):
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT password_hash
+                FROM passenger
+                WHERE id = :id
+            """),
+            {"id": staff_id}
+        ).mappings().first()
+
+    if not result:
+        raise HTTPException(
+            status_code=401,
+            detail="Employee account not found."
+        )
+
+    password_matches = bcrypt.checkpw(
+        request.password.encode("utf-8"),
+        result["password_hash"].encode("utf-8")
+    )
+
+    if not password_matches:
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect password."
+        )
+
+    return {"verified": True}
+
+FLIGHT_HEADER_SQL = """
+SELECT id, flight_no, status, origin, destination, depart_at, arrive_at
+FROM flight
+WHERE id = :flight_id
+"""
+
+MANIFEST_SQL = """
+SELECT ps.id AS booking_id, ps.booking_ref, ps.traveler_name, ps.status,
+       ps.checked_bags, ps.checked_in_at,
+       s.seat_no, s.tier,
+       p.id AS passenger_id, p.email AS account_email, p.full_name AS account_name
+FROM passenger_seat ps
+JOIN seat s      ON s.id = ps.seat_id
+JOIN passenger p ON p.id = ps.passenger_id
+WHERE ps.flight_id = :flight_id
+  AND (ps.status = 'confirmed' OR CAST(:include_cancelled AS boolean))
+ORDER BY length(s.seat_no), s.seat_no
+"""
+
+
+@app.get("/flights/{flight_id}/passengers")
+def get_flight_passengers(
+    flight_id: int,
+    include_cancelled: bool = False,
+    staff_id: int = Depends(require_staff),
+):
+    with engine.connect() as conn:
+        flight = conn.execute(text(FLIGHT_HEADER_SQL), {"flight_id": flight_id}).mappings().first()
+        if not flight:
+            raise HTTPException(status_code=404, detail="Flight not found")
+        rows = conn.execute(
+            text(MANIFEST_SQL),
+            {"flight_id": flight_id, "include_cancelled": include_cancelled},
+        ).mappings().all()
+
+    return {
+        "flight": {
+            "id": flight["id"],
+            "flight_no": flight["flight_no"],
+            "status": flight["status"],
+            "from_code": flight["origin"],
+            "to_code": flight["destination"],
+            "depart_at": flight["depart_at"],
+            "arrive_at": flight["arrive_at"],
+        },
+        "passenger_count": sum(1 for r in rows if r["status"] == "confirmed"),
+        "passengers": [
+            {
+                "booking_id": r["booking_id"],
+                "booking_ref": r["booking_ref"],
+                "traveler_name": r["traveler_name"],
+                "seat_no": r["seat_no"],
+                "tier": r["tier"],
+                "booked_by": {
+                    "passenger_id": r["passenger_id"],
+                    "name": r["account_name"],
+                    "email": r["account_email"],
+                },
+            }
+            for r in rows
+        ],
+    }
