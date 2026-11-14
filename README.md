@@ -17,6 +17,7 @@ npm run dev
 ```
 ## Backend:
 ```
+cd backend
 uvcorn main:app --reload
 ```
 \
