@@ -20,7 +20,7 @@ npm run dev
 ```
 cd src
 cd backend
-uvcorn main:app --reload
+uvicorn main:app --reload
 ```
 \
 Then open the link it prints (usually http://localhost:5173).
