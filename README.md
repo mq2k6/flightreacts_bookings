@@ -11,12 +11,14 @@ You need Node.js 20 or newer.
 # Run it
 ## Frontend:
 ```
+cd src
 cd frontend
 npm install
 npm run dev
 ```
 ## Backend:
 ```
+cd src
 cd backend
 uvcorn main:app --reload
 ```
