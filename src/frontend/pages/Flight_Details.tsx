@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getUserId, getEmployeeId, getAdmin } from "../utils/auth";
+import { getUserId, getEmployeeId, getAdmin, isAdminEmployee } from "../utils/auth";
 
 type Tier = "premium" | "standard" | "economy";
 
@@ -504,8 +504,8 @@ async function handleConfirmCancellation(e: React.FormEvent<HTMLFormElement>) {
                   </button>
                 )}
 
-                {/* Keep employee cancellation functionality */}
-                {employeeId !== null && admin && (
+                {/* Cancel Flight: admins only (AUTH-3), and not on an already-cancelled flight */}
+                {employeeId !== null && admin && isAdminEmployee() && flight.status !== "cancelled" && (
                   <button
                     type="button"
                     onClick={handleCancelClick}

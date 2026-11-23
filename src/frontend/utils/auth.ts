@@ -16,6 +16,17 @@ export function getEmployeeId(): number | null {
   }
 }
 
+// AUTH-3: true only for employees whose staff.employee_type is 'admin'.
+// (Different from getAdmin() below, which is the "Admin Mode" UI toggle any staff can use.)
+export function isAdminEmployee(): boolean {
+  try {
+    const employee = JSON.parse(localStorage.getItem("employee") ?? "null");
+    return employee?.employee_type === "admin";
+  } catch {
+    return false;
+  }
+}
+
 export function getAdmin(): boolean {
   return localStorage.getItem("admin") === "true";
 }

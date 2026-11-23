@@ -5,6 +5,7 @@ export default function Emp_LogIn() {
   const [empId, setEmpId] = useState("");
   const [password, setPassword] = useState("");
   const [invalidLogin, setInvalidLogin] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
   const navigate = useNavigate();
@@ -22,7 +23,8 @@ export default function Emp_LogIn() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          empId: `EMP${empId}`,
+          // Accept "9001", "emp9001" or "EMP9001" -> always send "EMP9001"
+          empId: "EMP" + empId.trim().toUpperCase().replace(/^EMP/, ""),
           password: password,
         }),
       });
@@ -49,6 +51,11 @@ export default function Emp_LogIn() {
 
     } catch (error) {
       console.error("Login error:", error);
+      setErrorMessage(
+        error instanceof Error && error.message !== "Failed to fetch"
+          ? error.message
+          : "Unable to log in. Please try again."
+      );
       setInvalidLogin(true);
 
     } finally {
@@ -77,18 +84,17 @@ export default function Emp_LogIn() {
         {/* Email */}
         <label className="flex flex-col items-start gap-1 w-full overflow-hidden">
           <p className="text-[#737373] font-inter text-[10px] w-fit">
-            Employee Id
+            Employee number
           </p>
           <input
-         
-            type="empId"
+            type="text"
             required
-            value={`EMP${empId}`}
+            value={empId}
             onChange={(e) => {
-              setEmpId(e.target.value.substring(3));
+              setEmpId(e.target.value);
               setInvalidLogin(false);
             }}
-            placeholder="EMP0000"
+            placeholder="EMP9001"
             className="flex py-[7px] px-2 items-start rounded border border-[#D1C7EB] bg-[#FFF] w-full overflow-hidden text-[#2E2E2E] font-inter text-[11px] outline-none focus:border-[#5C339E]"
           />
         </label>
@@ -116,7 +122,7 @@ export default function Emp_LogIn() {
         {/* Conditional Error Message */}
         {invalidLogin && (
           <p className="text-red-500 font-inter text-[10px] w-fit">
-            Incorrect Id or password
+            {errorMessage || "Invalid employee number or password"}
           </p>
         )}
 

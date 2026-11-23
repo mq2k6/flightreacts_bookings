@@ -2,7 +2,7 @@
 import { useState, useEffect, type FormEvent } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import FlightCard, { type Flight } from "../components/FlightCard";
-import { getUserId, getEmployeeId, getAdmin } from "../utils/auth";
+import { getUserId, getEmployeeId, getAdmin, isAdminEmployee } from "../utils/auth";
 
 type Plane = {
   id: number;
@@ -281,8 +281,8 @@ function handleSubmit(e: FormEvent<HTMLFormElement>) {
             My Account
             </button>
 
-            {/* REP-2 / REP-3: staff-only Reports page */}
-            {employeeId!=null && <button
+            {/* REP-2 / REP-3: Reports page, admins only (AUTH-3) */}
+            {employeeId!=null && isAdminEmployee() && <button
             type="button"
             onClick={() => navigate("/reports")}
             className="hover:text-[#5C339E]"

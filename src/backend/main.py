@@ -27,7 +27,7 @@ from openpyxl.utils import get_column_letter
 # FILE LAYOUT
 # ==============================================================
 # 1. App setup & config
-# 2. Auth dependencies (token checks, staff check)
+# 2. Auth dependencies (token checks, staff check, admin check)
 # 3. Auth endpoints (login, signup, employee login, /me)
 # 4. Flights (search, upcoming, details)
 # 5. Planes & fares
@@ -116,6 +116,28 @@ def require_staff(user_id: int = Depends(get_current_user_id)) -> int:
         raise HTTPException(
             status_code=403,
             detail="Staff access required"
+        )
+
+    return user_id
+
+
+# AUTH-3: admin-only actions (cancel a flight, reports). staff.employee_type is
+# 'staff' or 'admin'; travelers have no staff row at all. Both get 403.
+def require_admin(user_id: int = Depends(get_current_user_id)) -> int:
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT 1
+                FROM staff
+                WHERE passenger_id = :user_id AND employee_type = 'admin'
+            """),
+            {"user_id": user_id}
+        ).first()
+
+    if not result:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required"
         )
 
     return user_id
@@ -232,7 +254,7 @@ def employee_login(request: EmployeeLoginRequest):
         result = connection.execute(
             text("""
                 SELECT p.id, p.password_hash,
-                       s.employee_no, p.email, p.full_name
+                       s.employee_no, s.employee_type, p.email, p.full_name
                 FROM passenger p
                 JOIN staff s ON s.passenger_id = p.id
                 WHERE s.employee_no = :empId
@@ -245,7 +267,7 @@ def employee_login(request: EmployeeLoginRequest):
         request.password.encode("utf-8"),
         result.password_hash.encode("utf-8"),
     ):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Invalid employee number or password")
 
     token = jwt.encode(
         {
@@ -263,6 +285,7 @@ def employee_login(request: EmployeeLoginRequest):
         "employee": {
             "id": result.id,
             "employee_no": result.employee_no,
+            "employee_type": result.employee_type,   # 'staff' or 'admin' (AUTH-3)
         },
         "passenger": {
             "id": result.id,
@@ -277,12 +300,19 @@ def employee_login(request: EmployeeLoginRequest):
 def me(passenger_id: int = Depends(get_current_user_id)):
     with engine.connect() as connection:
         result = connection.execute(
-            text("SELECT id, email, full_name FROM passenger WHERE id = :id"),
+            text("""
+                SELECT p.id, p.email, p.full_name, s.employee_type
+                FROM passenger p
+                LEFT JOIN staff s ON s.passenger_id = p.id
+                WHERE p.id = :id
+            """),
             {"id": passenger_id},
         ).fetchone()
     if not result:
         raise HTTPException(status_code=404, detail="Passenger not found")
-    return {"id": result.id, "email": result.email, "full_name": result.full_name}
+    # employee_type is None for travelers, 'staff' or 'admin' for employees
+    return {"id": result.id, "email": result.email, "full_name": result.full_name,
+            "employee_type": result.employee_type}
 
 
 # ==============================================================
@@ -1127,7 +1157,7 @@ class FlightCancellationRequest(BaseModel):
 def cancel_flight(
     flight_id: int,
     request: FlightCancellationRequest,
-    staff_id: int = Depends(require_staff)
+    staff_id: int = Depends(require_admin)   # AUTH-3: admins only
 ):
     # Everything below runs in ONE transaction (engine.begin()): either the flight is
     # cancelled AND all its bookings are refunded, or nothing changes at all.
@@ -1540,7 +1570,7 @@ def popular_routes_report(
     end: Annotated[date | None, BlankIsNone] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 10,
     format: Literal["json", "xlsx"] = "json",
-    staff_id: int = Depends(require_staff),
+    staff_id: int = Depends(require_admin),   # AUTH-3: admins only
 ):
     start, end = report_period(start, end)
     with engine.connect() as conn:
@@ -1569,7 +1599,7 @@ def frequent_cities_report(
     end: Annotated[date | None, BlankIsNone] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 10,
     format: Literal["json", "xlsx"] = "json",
-    staff_id: int = Depends(require_staff),
+    staff_id: int = Depends(require_admin),   # AUTH-3: admins only
 ):
     start, end = report_period(start, end)
     with engine.connect() as conn:
