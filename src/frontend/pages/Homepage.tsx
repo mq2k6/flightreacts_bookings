@@ -52,6 +52,8 @@ export default function HomePage() {
   const [loadingUpcoming, setLoadingUpcoming] = useState(true);
   const [loadingSearch, setLoadingSearch] = useState(false);
   const [error, setError] = useState("");
+  // UI-2: whether the last search used any filter, so an empty result can say why
+  const [searchWasFiltered, setSearchWasFiltered] = useState(false);
 
 useEffect(() => {
   async function getUser() {
@@ -136,6 +138,11 @@ useEffect(() => {
   }
 
   setsearchSubmitted(true);
+  setSearchWasFiltered(
+    maxPrice !== "" ||
+      (departureTime !== "" && departureTime !== "Any") ||
+      seatTier !== "Any"
+  );
   setLoadingSearch(true);
   setError("");
   setSearchResults([]);
@@ -582,7 +589,9 @@ function handleSubmit(e: FormEvent<HTMLFormElement>) {
               ))
             ) : (
               <p className="text-[#737373] font-inter text-[10px]">
-                No flights found matching your search.
+                {searchWasFiltered
+                  ? "No flights match your filters."
+                  : "No flights found matching your search."}
               </p>
             )}
 

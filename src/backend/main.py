@@ -2,7 +2,8 @@ import os
 import re
 import secrets
 import string
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
 from typing import Annotated
 from zoneinfo import ZoneInfo
 import random
@@ -12,7 +13,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, BeforeValidator, EmailStr, Field
 from sqlalchemy import create_engine, text, bindparam
 from sqlalchemy.exc import IntegrityError
 
@@ -303,15 +304,21 @@ LEFT JOIN passenger_seat ps
 WHERE f.status = 'scheduled' AND f.depart_at >= now()
   {extra}
 GROUP BY f.id, o.city, d.city
+{having}
 ORDER BY f.depart_at
 LIMIT :limit
 """
 
 
-def query_flights(extra: str = "", **params):
+# extra  = more conditions for WHERE (checked on each flight row before grouping)
+# having = conditions on the per-flight seat counts (checked after GROUP BY)
+# Both must be fixed SQL written in this file; user input only ever goes in **params.
+def query_flights(extra: str = "", having: str = "", **params):
     params.setdefault("limit", 100)
     with engine.connect() as conn:
-        rows = conn.execute(text(FLIGHT_SQL.format(extra=extra)), params).mappings().all()
+        rows = conn.execute(
+            text(FLIGHT_SQL.format(extra=extra, having=having)), params
+        ).mappings().all()
     return [
         {
             "id": r["id"],
@@ -384,28 +391,108 @@ def upcoming_flights(user_id: int = Depends(get_current_user_id), limit: int = 1
     ]
 
 
-@app.get("/flights/search")
+# ---------- UI-2: search filters ----------
 
+# The homepage sends every filter on every search, using "" for "not set".
+# This turns "" into None before FastAPI validates the value, so blank = no filter.
+def _blank_to_none(value):
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return value
+
+
+BlankIsNone = BeforeValidator(_blank_to_none)
+
+# Homepage "Departure" dropdown -> local departure time window at the origin airport
+# (start inclusive, end exclusive). Together the three cover the whole day.
+DEPARTURE_WINDOWS = {
+    "morning":   (None,         time(12, 0)),   # before 12:00
+    "afternoon": (time(12, 0),  time(17, 0)),   # 12:00 - 16:59
+    "evening":   (time(17, 0),  None),          # 17:00 onwards
+}
+
+SEAT_TIERS = {"premium", "standard", "economy"}
+
+
+@app.get("/flights/search")
 def search_flights(
     from_code: Annotated[str, Query(alias="from")],
     to: str,
-    departure_date: date | None = None,
+    departure_date: Annotated[date | None, BlankIsNone] = None,
     flex_days: int = 7,
+    max_price: Annotated[Decimal | None, BlankIsNone] = None,  # dollars
+    departure_time: Annotated[str | None, BlankIsNone] = None,
+    seat_tier: Annotated[str | None, BlankIsNone] = None,
+    direct_only: str | None = None,   # accepted but ignored: every flight in this system is direct
     user_id: int = Depends(get_current_user_id),
 ):
-    return query_flights(
-        extra="""AND f.origin = :origin AND f.destination = :dest
-                 AND (CAST(:day AS date) IS NULL
-                    OR (f.depart_at AT TIME ZONE o.timezone)::date
-                        BETWEEN CAST(:day AS date) - CAST(:flex AS integer)
-                            AND CAST(:day AS date) + CAST(:flex AS integer))""",
-        origin=from_code.upper(),
-        dest=to.upper(),
-        day=departure_date,
-        flex=flex_days,
-        user_id=user_id,
-       
-    )
+    where = [
+        "AND f.origin = :origin AND f.destination = :dest",
+        """AND (CAST(:day AS date) IS NULL
+                OR (f.depart_at AT TIME ZONE o.timezone)::date
+                    BETWEEN CAST(:day AS date) - CAST(:flex AS integer)
+                        AND CAST(:day AS date) + CAST(:flex AS integer))""",
+    ]
+    having = ""
+    params = {
+        "origin": from_code.upper(),
+        "dest": to.upper(),
+        "day": departure_date,
+        "flex": flex_days,
+        "user_id": user_id,
+    }
+
+    # Seat tier: "Any" (or blank) = no tier filter. Case-insensitive ("Economy" works).
+    tier = seat_tier.strip().lower() if seat_tier else None
+    if tier == "any":
+        tier = None
+    if tier is not None and tier not in SEAT_TIERS:
+        raise HTTPException(status_code=422, detail="seat_tier must be Any, premium, standard or economy")
+
+    if tier is not None:
+        # "Has at least one free seat in this tier" is a per-flight seat COUNT,
+        # which only exists after GROUP BY, so it has to go in HAVING, not WHERE.
+        having = "HAVING COUNT(*) FILTER (WHERE s.tier = :tier AND ps.id IS NULL) > 0"
+        params["tier"] = tier
+
+    # Max price: the UI sends dollars; fares are stored in cents.
+    if max_price is not None and (not max_price.is_finite() or max_price < 0):
+        raise HTTPException(status_code=422, detail="max_price must be a number of dollars, 0 or more")
+    if max_price is not None:
+        params["max_cents"] = int(max_price * 100)
+        if tier is None:
+            # No tier chosen: the flight matches if its cheapest fare fits the budget
+            where.append("""AND LEAST(f.premium_fare_cents, f.standard_fare_cents,
+                                   f.economy_fare_cents) <= :max_cents""")
+        else:
+            # Tier chosen: compare against that tier's fare (column picked by a fixed CASE)
+            where.append("""AND CASE :tier WHEN 'premium'  THEN f.premium_fare_cents
+                                      WHEN 'standard' THEN f.standard_fare_cents
+                                      ELSE f.economy_fare_cents END <= :max_cents""")
+
+    # Departure time: local time at the ORIGIN airport (a 9:00 YVR flight is "morning"
+    # even though it is 12:00 in Toronto). Accepts Morning/Afternoon/Evening from the
+    # dropdown, or an exact "HH:MM" meaning "departs at or after this time".
+    if departure_time is not None and departure_time.strip().lower() != "any":
+        key = departure_time.strip().lower()
+        if key in DEPARTURE_WINDOWS:
+            dep_from, dep_to = DEPARTURE_WINDOWS[key]
+        else:
+            try:
+                dep_from, dep_to = time.fromisoformat(key), None
+            except ValueError:
+                raise HTTPException(
+                    status_code=422,
+                    detail="departure_time must be Any, Morning, Afternoon, Evening or HH:MM",
+                )
+        if dep_from is not None:
+            where.append("AND (f.depart_at AT TIME ZONE o.timezone)::time >= :dep_from")
+            params["dep_from"] = dep_from
+        if dep_to is not None:
+            where.append("AND (f.depart_at AT TIME ZONE o.timezone)::time < :dep_to")
+            params["dep_to"] = dep_to
+
+    return query_flights(extra="\n  ".join(where), having=having, **params)
 
 
 FLIGHT_DETAIL_SQL = """
