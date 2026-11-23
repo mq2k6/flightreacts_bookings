@@ -853,12 +853,34 @@ LIMIT 50
 """
 
 
+# FLT-2: bookings the airline cancelled (flight cancelled by staff), with the refund.
+# Only flights scheduled from 30 days ago onward, so old notices don't pile up forever.
+ACCOUNT_AIRLINE_CANCELLED_SQL = """
+SELECT ps.id AS booking_id, ps.booking_ref, ps.total_cents, ps.refund_cents, ps.cancelled_at,
+       s.seat_no, s.tier,
+       f.id AS flight_id, f.flight_no, f.depart_at,
+       f.origin AS from_code, f.destination AS to_code, o.timezone AS from_tz
+FROM passenger_seat ps
+JOIN flight f  ON f.id = ps.flight_id
+JOIN seat s    ON s.id = ps.seat_id
+JOIN airport o ON o.code = f.origin
+WHERE ps.passenger_id = :uid
+  AND ps.status = 'cancelled'
+  AND ps.cancel_reason = 'flight_cancelled'
+  AND f.depart_at >= now() - interval '30 days'
+ORDER BY f.depart_at, f.id, length(s.seat_no), s.seat_no
+"""
+
+
 @app.get("/account/overview")
 def account_overview(user_id: int = Depends(get_current_user_id)):
     now = datetime.now(timezone.utc)
     with engine.connect() as conn:
         upcoming = conn.execute(text(ACCOUNT_UPCOMING_SQL), {"uid": user_id}).mappings().all()
         history = conn.execute(text(ACCOUNT_HISTORY_SQL), {"uid": user_id}).mappings().all()
+        airline_cancelled = conn.execute(
+            text(ACCOUNT_AIRLINE_CANCELLED_SQL), {"uid": user_id}
+        ).mappings().all()
         taken = conn.execute(
             text("""
                 SELECT COUNT(DISTINCT ps.flight_id)
@@ -889,6 +911,23 @@ def account_overview(user_id: int = Depends(get_current_user_id)):
     return {
         "total_flights_taken": taken or 0,
         "upcoming": upcoming_out,
+        "airline_cancelled": [
+            {
+                "booking_id": r["booking_id"],
+                "booking_ref": r["booking_ref"],
+                "flight_id": r["flight_id"],
+                "flight_no": r["flight_no"],
+                "from_code": r["from_code"], "to_code": r["to_code"],
+                "from_timezone": r["from_tz"],
+                "depart_at": r["depart_at"],
+                "seat_no": r["seat_no"],
+                "tier": r["tier"],
+                "total_cents": r["total_cents"],
+                "refund_cents": r["refund_cents"],
+                "cancelled_at": r["cancelled_at"],
+            }
+            for r in airline_cancelled
+        ],
         "history": [
             {
                 "flight_id": r["flight_id"],
@@ -933,7 +972,8 @@ def cancel_bookings(req: CancelRequest, user_id: int = Depends(get_current_user_
             conn.execute(
                 text("""
                     UPDATE passenger_seat
-                    SET status = 'cancelled', cancelled_at = now(), refund_cents = :refund
+                    SET status = 'cancelled', cancelled_at = now(), refund_cents = :refund,
+                        cancel_reason = 'traveler'
                     WHERE id = :id
                 """),
                 {"refund": refund, "id": r["id"]},
@@ -996,13 +1036,17 @@ def cancel_flight(
     request: FlightCancellationRequest,
     staff_id: int = Depends(require_staff)
 ):
-    # Verify the flight exists
+    # Everything below runs in ONE transaction (engine.begin()): either the flight is
+    # cancelled AND all its bookings are refunded, or nothing changes at all.
     with engine.begin() as conn:
+        # FOR UPDATE locks the flight row, so no new booking can be made on this
+        # flight while we are cancelling it (POST /bookings locks the same row).
         flight = conn.execute(
             text("""
-                SELECT id, status
+                SELECT id, status, depart_at <= now() AS departed
                 FROM flight
                 WHERE id = :flight_id
+                FOR UPDATE
             """),
             {"flight_id": flight_id}
         ).mappings().first()
@@ -1017,6 +1061,13 @@ def cancel_flight(
             raise HTTPException(
                 status_code=400,
                 detail="This flight is already cancelled."
+            )
+
+        # A flight that has already flown can't be cancelled (it would refund everyone)
+        if flight["departed"]:
+            raise HTTPException(
+                status_code=400,
+                detail="This flight has already departed."
             )
 
         # Retrieve the authenticated employee's password hash
@@ -1056,10 +1107,25 @@ def cancel_flight(
             {"flight_id": flight_id}
         )
 
+        # FLT-2: cancel every confirmed booking on the flight with a 100% refund.
+        # RETURNING gives back one row per refunded booking so we can report totals.
+        refunded = conn.execute(
+            text("""
+                UPDATE passenger_seat
+                SET status = 'cancelled', cancelled_at = now(),
+                    refund_cents = total_cents, cancel_reason = 'flight_cancelled'
+                WHERE flight_id = :flight_id AND status = 'confirmed'
+                RETURNING refund_cents
+            """),
+            {"flight_id": flight_id}
+        ).scalars().all()
+
     return {
         "message": "Flight successfully cancelled.",
         "flight_id": flight_id,
-        "status": "cancelled"
+        "status": "cancelled",
+        "bookings_refunded": len(refunded),
+        "total_refunded_cents": sum(refunded),
     }
 
 

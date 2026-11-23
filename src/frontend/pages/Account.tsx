@@ -17,6 +17,22 @@ interface UpcomingBooking {
   refund_percent: number;
 }
 
+// FLT-2: a booking the airline cancelled (staff cancelled the whole flight)
+interface AirlineCancelledBooking {
+  booking_id: number;
+  booking_ref: string;
+  flight_id: number;
+  flight_no: string;
+  from_code: string;
+  to_code: string;
+  from_timezone: string;
+  depart_at: string;
+  seat_no: string;
+  tier: string;
+  total_cents: number;
+  refund_cents: number;
+}
+
 interface HistoryRow {
   flight_id: number;
   flight_no: string;
@@ -30,6 +46,7 @@ interface HistoryRow {
 interface AccountData {
   total_flights_taken: number;
   upcoming: UpcomingBooking[];
+  airline_cancelled: AirlineCancelledBooking[];
   history: HistoryRow[];
 }
 
@@ -45,6 +62,10 @@ interface FlightGroup {
 
 const money = (cents: number) =>
   cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
+
+// Always two decimals, e.g. "$1,234.50"
+const dollars = (cents: number) =>
+  `$${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -128,6 +149,21 @@ export default function Account() {
           depart_at: b.depart_at,
           bookings: [b],
         });
+      }
+    }
+    return Array.from(map.values());
+  }, [data]);
+
+  // FLT-2: airline-cancelled bookings, one card per flight
+  const cancelledGroups = useMemo(() => {
+    const map = new Map<number, { first: AirlineCancelledBooking; seats: string[]; refund: number }>();
+    for (const b of data?.airline_cancelled ?? []) {
+      const g = map.get(b.flight_id);
+      if (g) {
+        g.seats.push(b.seat_no);
+        g.refund += b.refund_cents;
+      } else {
+        map.set(b.flight_id, { first: b, seats: [b.seat_no], refund: b.refund_cents });
       }
     }
     return Array.from(map.values());
@@ -316,6 +352,39 @@ export default function Account() {
                   </div>
                 );
               })
+            )}
+
+            {/* FLT-2: flights the airline cancelled */}
+            {cancelledGroups.length > 0 && (
+              <>
+                <h2 className="text-[#2E2E2E] font-inter text-xs font-bold mt-1">Cancelled flights</h2>
+                {cancelledGroups.map(({ first, seats, refund }) => (
+                  <div
+                    key={first.flight_id}
+                    className="flex items-center justify-between gap-3 w-full rounded-lg border border-[#F2B8B5] bg-[#FDF3F2] px-4 py-3"
+                  >
+                    <div className="flex flex-col gap-1 min-w-0">
+                      <p className="text-[#2E2E2E] font-inter text-sm font-bold line-through decoration-[#B3261E]/60">
+                        {first.flight_no} · {first.from_code} → {first.to_code}
+                      </p>
+                      <p className="text-[#737373] font-inter text-[11px]">
+                        {fmt(first.depart_at, first.from_timezone, {
+                          weekday: "short",
+                          month: "short",
+                          day: "numeric",
+                        })}
+                        {" · "}
+                        {fmtTime(first.depart_at, first.from_timezone)}
+                        {" · "}
+                        {seats.length === 1 ? "Seat" : "Seats"} {seats.join(", ")}
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-md bg-[#B3261E] px-3 py-1.5 text-white font-inter text-[11px] font-bold">
+                      Cancelled by airline — refunded {dollars(refund)}
+                    </span>
+                  </div>
+                ))}
+              </>
             )}
 
             {/* Flight history */}

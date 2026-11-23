@@ -52,8 +52,8 @@ join plane p on p.model = l.model
 cross join lateral generate_series(l.row_from, l.row_to) r
 cross join lateral generate_series(1, length(l.letters)) i;
 
--- Seat-map layout and per-minute fare rates (columns added by db/migrations/sprint2_migration.sql,
--- so run that migration before this seed). Rates are in cents per minute of flight time;
+-- Seat-map layout and per-minute fare rates (columns added by db/migrations/sprint2_migration.sql;
+-- run all migrations before this seed). Rates are in cents per minute of flight time;
 -- POST /flights and GET /fares/calculate use them to price new flights.
 update plane p
 set seat_columns             = v.cols,
@@ -135,7 +135,7 @@ join passenger p on p.email = v.e;
 --       'cancel' = passenger cancelled (full refund), 'flightcx' = flight cancelled (full refund)
 insert into passenger_seat (booking_ref, passenger_id, flight_id, seat_id, traveler_name,
     base_fare_cents, taxes_cents, fees_cents, checked_bags, bag_fees_cents, total_cents,
-    payment_ref, status, created_at, cancelled_at, refund_cents, checked_in_at)
+    payment_ref, status, created_at, cancelled_at, refund_cents, checked_in_at, cancel_reason)
 select b.ref, p.id, f.id, s.id, b.traveler,
        x.base, x.tax, 2500, b.bags, b.bags * 3500,
        x.base + x.tax + 2500 + b.bags * 3500,
@@ -144,7 +144,8 @@ select b.ref, p.id, f.id, s.id, b.traveler,
        least(f.depart_at - interval '12 days', now() - interval '2 days'),
        case when b.kind in ('cancel','flightcx') then now() - interval '1 day' end,
        case when b.kind in ('cancel','flightcx') then x.base + x.tax + 2500 + b.bags * 3500 end,
-       case when b.kind = 'checkin' then f.depart_at - interval '20 hours' end
+       case when b.kind = 'checkin' then f.depart_at - interval '20 hours' end,
+       case b.kind when 'cancel' then 'traveler' when 'flightcx' then 'flight_cancelled' end
 from (values
   ('FRA1B2','alice.nguyen@example.com','FR101','3A','Alice Nguyen',1,'checkin'),
   ('FRA1B3','alice.nguyen@example.com','FR102','3A','Alice Nguyen',1,'checkin'),

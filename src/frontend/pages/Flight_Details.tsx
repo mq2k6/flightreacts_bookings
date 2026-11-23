@@ -94,6 +94,10 @@ export default function Flight_Details() {
   const [cancelPassword, setCancelPassword] = useState("");
   const [cancelError, setCancelError] = useState("");
   const [cancelling, setCancelling] = useState(false);
+  // FLT-2: result of a successful flight cancellation, shown in the modal
+  const [cancelResult, setCancelResult] = useState<
+    { bookings_refunded: number; total_refunded_cents: number } | null
+  >(null);
 
 useEffect(() => {
   
@@ -267,6 +271,7 @@ const seatGroups = useMemo(() => {
   function handleCancelClick() {
   setCancelPassword("");
   setCancelError("");
+  setCancelResult(null);
   setShowCancelModal(true);
 }
 
@@ -305,8 +310,12 @@ async function handleConfirmCancellation(e: React.FormEvent<HTMLFormElement>) {
       return;
     }
 
-    setShowCancelModal(false);
-    navigate("/home");
+    // Keep the modal open and show what happened to the bookings
+    setCancelResult({
+      bookings_refunded: data.bookings_refunded,
+      total_refunded_cents: data.total_refunded_cents,
+    });
+    setFlight((prev) => (prev ? { ...prev, status: "cancelled" } : prev));
 
   } catch (error) {
     console.error("Error cancelling flight:", error);
@@ -650,6 +659,33 @@ async function handleConfirmCancellation(e: React.FormEvent<HTMLFormElement>) {
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
         <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
 
+          {cancelResult ? (
+            <>
+              <h2 className="text-[#2E2E2E] font-inter text-lg font-bold">
+                Flight cancelled
+              </h2>
+              <p className="mt-2 text-[#2E2E2E] font-inter text-sm">
+                Flight cancelled. {cancelResult.bookings_refunded} booking
+                {cancelResult.bookings_refunded === 1 ? "" : "s"} refunded
+                {cancelResult.bookings_refunded > 0 &&
+                  ` (${dollars(cancelResult.total_refunded_cents)} total)`}
+                .
+              </p>
+              <div className="flex justify-end mt-5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCancelModal(false);
+                    navigate("/home");
+                  }}
+                  className="rounded-md bg-[#5C339E] px-4 py-2 text-xs font-bold text-white hover:bg-[#48277D]"
+                >
+                  Done
+                </button>
+              </div>
+            </>
+          ) : (
+          <>
           <h2 className="text-[#2E2E2E] font-inter text-lg font-bold">
             Confirm Flight Cancellation
           </h2>
@@ -703,6 +739,8 @@ async function handleConfirmCancellation(e: React.FormEvent<HTMLFormElement>) {
 
             </div>
           </form>
+          </>
+          )}
         </div>
       </div>
     )}
