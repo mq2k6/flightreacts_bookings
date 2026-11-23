@@ -52,6 +52,23 @@ join plane p on p.model = l.model
 cross join lateral generate_series(l.row_from, l.row_to) r
 cross join lateral generate_series(1, length(l.letters)) i;
 
+-- Seat-map layout and per-minute fare rates (columns added by db/migrations/sprint2_migration.sql,
+-- so run that migration before this seed). Rates are in cents per minute of flight time;
+-- POST /flights and GET /fares/calculate use them to price new flights.
+update plane p
+set seat_columns             = v.cols,
+    seat_layout              = v.layout,
+    premium_fare_per_minute  = v.prem,
+    standard_fare_per_minute = v.std,
+    economy_fare_per_minute  = v.eco
+from (values
+  ('Airbus A220-300',   6, array[3,3],   494.75, 263.87, 164.92),
+  ('Boeing 737 MAX 8',  6, array[3,3],   448.60, 239.26, 149.53),
+  ('Embraer E175',      4, array[2,2],   428.91, 228.75, 142.97),
+  ('Boeing 787-9',     10, array[3,4,3], 535.04, 285.36, 178.35)
+) v(model, cols, layout, prem, std, eco)
+where p.model = v.model;
+
 -- 3. Flights (depart time is local to origin airport) ---------------------
 insert into flight (flight_no, plane_id, origin, destination, depart_at, arrive_at, status,
                     premium_fare_cents, standard_fare_cents, economy_fare_cents)
