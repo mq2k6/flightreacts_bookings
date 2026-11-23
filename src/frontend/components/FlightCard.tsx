@@ -93,7 +93,7 @@ if (seats.length > 0) {
 
   if (type === "search") {
     const fare = lowestFare(flight.fares_cents);
-    if (fare !== null) details.push(`From $${fare.toFixed(2)}`);
+    if (fare !== null) details.push(`From $${(fare / 100).toFixed(2)}`);
   }
 
   const flightId = flight.flight_id ?? flight.id;

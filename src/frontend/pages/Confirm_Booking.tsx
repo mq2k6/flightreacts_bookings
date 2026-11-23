@@ -29,13 +29,13 @@ interface Traveler {
   bag: boolean;
 }
 
-const TAX_PERCENT = 14;
-const BAG_PRICE = 15;
+const TAX_PERCENT = 13; // must match BOOKING_TAX_PERCENT in main.py
+const BAG_PRICE = 1500; // cents, matches BOOKING_BAG_CENTS in main.py
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 const money = (cents: number) =>
-  cents  === 0 ? `$${cents }` : `$${(cents ).toFixed(2)}`;
+  cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
 
 // Integer math so the frontend and backend always round the same way
 const taxFor = (fareCents: number) =>

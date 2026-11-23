@@ -1124,6 +1124,12 @@ def create_flight(body: FlightCreate, staff_id: int = Depends(require_staff)):
             if depart.tzinfo is None:
                 depart = depart.replace(tzinfo=ZoneInfo(zones[origin]))
 
+            if depart <= datetime.now(timezone.utc):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Departure time must be in the future"
+                )
+
             # Calculate arrival using elapsed flight duration.
             arrive = depart + timedelta(minutes=body.duration_minutes)
             flight_no = generate_flight_number(conn)
