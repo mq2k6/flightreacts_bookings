@@ -96,7 +96,16 @@ from (values
   ('FR701','Boeing 787-9','YYZ','LHR',     7, time '21:30', 420,'scheduled',79900),
   ('FR702','Boeing 787-9','LHR','YYZ',     8, time '10:15', 480,'scheduled',79900),
   ('FR901','Airbus A220-300','YUL','YYZ', 10, time '12:00',  80,'cancelled',12900),
-  ('FR112','Airbus A220-300','YYZ','YOW', 14, time '06:45',  60,'scheduled', 9900)
+  ('FR112','Airbus A220-300','YYZ','YOW', 14, time '06:45',  60,'scheduled', 9900),
+  -- Added in Sprint 3: upcoming YYZ<->YVR flights for the demo, and past flights so the
+  -- reports have booking history spread over several routes and dates
+  ('FR203','Boeing 737 MAX 8','YYZ','YVR', 5, time '08:15', 300,'scheduled',34900),
+  ('FR205','Boeing 737 MAX 8','YYZ','YVR', 9, time '17:45', 300,'scheduled',31900),
+  ('FR204','Boeing 737 MAX 8','YVR','YYZ', 6, time '12:30', 270,'scheduled',34900),
+  ('FR210','Boeing 737 MAX 8','YYZ','YVR',-30, time '08:15', 300,'scheduled',34900),
+  ('FR510','Boeing 737 MAX 8','YYZ','JFK',-40, time '08:00',  95,'scheduled',21900),
+  ('FR120','Airbus A220-300','YYZ','YUL',-20, time '07:00',  75,'scheduled',12900),
+  ('FR121','Airbus A220-300','YUL','YYZ',-18, time '18:30',  80,'scheduled',12900)
 ) v(flight_no, model, origin, dest, day_offset, dep_time, mins, status, econ)
 join plane p on p.model = v.model
 join airport a on a.code = v.origin;
@@ -191,5 +200,47 @@ select 'FRX' || lpad(row_number() over (order by s.id)::text, 3, '0'),
        'TEST-PAY-GROUP'
 from flight f join seat s on s.plane_id = f.plane_id
 where f.flight_no = 'FR112' and s.tier = 'economy' and s.seat_no not in ('20E','20F');
+
+-- 6. Extra bookings for the reports (REP-2 / REP-3) ------------------------
+-- n confirmed bookings per flight, on free seats from the back of the plane, spread over
+-- the 10 customer accounts and over the last ~80 days (always before departure).
+create temp table _report_bookings (flight_no text, n int) on commit drop;
+insert into _report_bookings values
+  ('FR203',12), ('FR205',6), ('FR210',8), ('FR204',7),
+  ('FR510',10), ('FR120',5), ('FR121',4), ('FR701',3), ('FR601',2);
+
+insert into passenger_seat (booking_ref, passenger_id, flight_id, seat_id, traveler_name,
+    base_fare_cents, taxes_cents, fees_cents, total_cents, payment_ref, created_at)
+select 'FRR' || lpad(row_number() over (order by f.id, s.rn)::text, 3, '0'),
+       cust.id, f.id, s.id, cust.full_name,
+       fare.base, round(fare.base * 0.13)::int, 2500,
+       fare.base + round(fare.base * 0.13)::int + 2500,
+       'TEST-PAY-REPORT',
+       least(f.depart_at - interval '1 day',
+             now() - make_interval(days => (((s.rn * 11 + f.id * 7) % 80) + 1)::int))
+from _report_bookings r
+join flight f on f.flight_no = r.flight_no
+cross join lateral (
+  select st.id, st.tier, row_number() over (order by st.id desc) as rn
+  from seat st
+  where st.plane_id = f.plane_id
+    and not exists (select 1 from passenger_seat b
+                    where b.flight_id = f.id and b.seat_id = st.id and b.status = 'confirmed')
+) s
+cross join lateral (
+  select p.id, p.full_name
+  from passenger p
+  where p.email like '%@example.com'
+    and p.email not in ('nopurchases@example.com')
+    and not exists (select 1 from staff st where st.passenger_id = p.id)
+  order by p.id
+  offset ((f.id + s.rn) % 10) limit 1
+) cust
+cross join lateral (
+  select case s.tier when 'premium' then f.premium_fare_cents
+                     when 'standard' then f.standard_fare_cents
+                     else f.economy_fare_cents end as base
+) fare
+where s.rn <= r.n;
 
 commit;

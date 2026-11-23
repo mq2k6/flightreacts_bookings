@@ -9,7 +9,8 @@ delete from passenger where email like '%@example.com';   -- staff rows cascade
 
 delete from flight
 where flight_no in ('FR101','FR102','FR201','FR110','FR111','FR202','FR301','FR302','FR401','FR402',
-                    'FR501','FR502','FR601','FR602','FR801','FR802','FR701','FR702','FR901','FR112')
+                    'FR501','FR502','FR601','FR602','FR801','FR802','FR701','FR702','FR901','FR112',
+                    'FR203','FR205','FR204','FR210','FR510','FR120','FR121')
   and not exists (select 1 from passenger_seat ps where ps.flight_id = flight.id);
 
 delete from plane   -- seats cascade

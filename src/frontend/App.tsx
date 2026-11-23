@@ -8,6 +8,7 @@ import Account from "./pages/Account"
 import Flight_Details from "./pages/Flight_Details"
 import Confirm_Booking from "./pages/Confirm_Booking"
 import Passenger_List from "./pages/Passenger_List"
+import Reports from "./pages/Reports"
 
 export default function App() {
 
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="/signup" element={<SignUp />} />
         <Route path="/home" element={<HomePage />} />
         <Route path="/passenger-list/:id" element={<Passenger_List />} />
+        <Route path="/reports" element={<Reports />} />
         <Route path="/account/:id" element={<Account />} />
         <Route path="/flight-details/:id" element={<Flight_Details />} />
         <Route path="/booking-site/:id" element={<Confirm_Booking />} />

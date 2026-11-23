@@ -281,6 +281,15 @@ function handleSubmit(e: FormEvent<HTMLFormElement>) {
             My Account
             </button>
 
+            {/* REP-2 / REP-3: staff-only Reports page */}
+            {employeeId!=null && <button
+            type="button"
+            onClick={() => navigate("/reports")}
+            className="hover:text-[#5C339E]"
+            >
+            Reports
+            </button>}
+
             {employeeId!=null && admin==false && <button
             type="button"
             onClick={() => {

@@ -1,10 +1,11 @@
+import io
 import os
 import re
 import secrets
 import string
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 import random
 import bcrypt
@@ -12,10 +13,14 @@ import jwt
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, BeforeValidator, EmailStr, Field
 from sqlalchemy import create_engine, text, bindparam
 from sqlalchemy.exc import IntegrityError
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 
 # ==============================================================
@@ -30,6 +35,7 @@ from sqlalchemy.exc import IntegrityError
 # 7. Bookings (create)
 # 8. Account page & cancellations
 # 9. Staff tools (verify password, cancel/create flight, passenger list)
+# 10. Reports (popular routes, frequent cities, Excel export)
 
 
 # ==============================================================
@@ -1404,3 +1410,182 @@ def get_flight_passengers(
             for r in rows
         ],
     }
+
+
+# ==============================================================
+# 10. REPORTS (popular routes, frequent cities, Excel export)
+# ==============================================================
+
+# REP-2: routes ranked by confirmed bookings MADE in the period (booking date),
+# with the revenue those bookings brought in.
+POPULAR_ROUTES_SQL = """
+SELECT f.origin, o.city AS origin_city, f.destination, d.city AS dest_city,
+       COUNT(ps.id) AS bookings, SUM(ps.total_cents) AS revenue_cents
+FROM passenger_seat ps
+JOIN flight f  ON f.id = ps.flight_id
+JOIN airport o ON o.code = f.origin
+JOIN airport d ON d.code = f.destination
+WHERE ps.status = 'confirmed'
+  AND ps.created_at::date BETWEEN :start AND :end
+GROUP BY f.origin, o.city, f.destination, d.city
+ORDER BY bookings DESC, revenue_cents DESC, f.origin, f.destination
+LIMIT :limit
+"""
+
+# REP-3: cities ranked by scheduled flights departing from or arriving at them,
+# for flights DEPARTING in the period (local date at the origin airport).
+# UNION ALL stacks "one row per departure" on top of "one row per arrival",
+# then GROUP BY adds them up per airport.
+FREQUENT_CITIES_SQL = """
+SELECT a.city, a.code,
+       SUM(m.is_departure) AS departures,
+       SUM(m.is_arrival)   AS arrivals,
+       COUNT(*)            AS total_flights
+FROM (
+    SELECT f.origin AS code, 1 AS is_departure, 0 AS is_arrival
+    FROM flight f JOIN airport o ON o.code = f.origin
+    WHERE f.status = 'scheduled'
+      AND (f.depart_at AT TIME ZONE o.timezone)::date BETWEEN :start AND :end
+    UNION ALL
+    SELECT f.destination AS code, 0 AS is_departure, 1 AS is_arrival
+    FROM flight f JOIN airport o ON o.code = f.origin
+    WHERE f.status = 'scheduled'
+      AND (f.depart_at AT TIME ZONE o.timezone)::date BETWEEN :start AND :end
+) m
+JOIN airport a ON a.code = m.code
+GROUP BY a.city, a.code
+ORDER BY total_flights DESC, departures DESC, a.city
+LIMIT :limit
+"""
+
+REPORT_DEFAULT_DAYS = 90       # default period: 90 days back to 90 days ahead
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def report_period(start: date | None, end: date | None) -> tuple[date, date]:
+    today = date.today()
+    start = start or today - timedelta(days=REPORT_DEFAULT_DAYS)
+    end = end or today + timedelta(days=REPORT_DEFAULT_DAYS)
+    if start > end:
+        raise HTTPException(status_code=400, detail="start must be on or before end")
+    return start, end
+
+
+def build_xlsx(title: str, start: date, end: date, columns: list[tuple[str, str]], rows: list[dict]):
+    """One-sheet workbook: title, period, bold header, one row per ranked item.
+    columns = [(header, key)]; keys ending in _cents are written as dollars."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = title[:31]                    # Excel sheet names max 31 chars
+
+    width = len(columns) + 1                 # +1 for the Rank column
+    ws.append([title])
+    ws.append([f"Period: {start.isoformat()} to {end.isoformat()}"])
+    ws.append([])
+    ws.append(["Rank"] + [h for h, _ in columns])
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=width)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=width)
+    ws["A1"].font = Font(bold=True, size=14)
+    ws["A2"].font = Font(italic=True, color="555555")
+
+    header_fill = PatternFill("solid", fgColor="F2EDFC")
+    for cell in ws[4]:
+        cell.font = Font(bold=True)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    for rank, row in enumerate(rows, start=1):
+        values = [rank]
+        for _, key in columns:
+            v = row[key]
+            values.append(v / 100 if key.endswith("_cents") and v is not None else v)
+        ws.append(values)
+        for col, (_, key) in enumerate(columns, start=2):
+            if key.endswith("_cents"):
+                ws.cell(row=ws.max_row, column=col).number_format = '"$"#,##0.00'
+
+    # Column widths: fit the longest value (min 8, max 40 characters)
+    for col in range(1, width + 1):
+        letter = get_column_letter(col)
+        longest = max(len(str(c.value)) for c in ws[letter][3:] if c.value is not None)
+        ws.column_dimensions[letter].width = min(max(longest + 3, 8), 40)
+    ws.freeze_panes = "A5"                   # header stays visible while scrolling
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def report_response(slug: str, title: str, start: date, end: date,
+                    columns: list[tuple[str, str]], rows: list[dict], fmt: str):
+    if fmt == "xlsx":
+        filename = f"{slug}_{start.isoformat()}_{end.isoformat()}.xlsx"
+        return StreamingResponse(
+            build_xlsx(title, start, end, columns, rows),
+            media_type=XLSX_MEDIA_TYPE,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    return {
+        "report": slug,
+        "start": start,
+        "end": end,
+        "rows": [{"rank": i, **r} for i, r in enumerate(rows, start=1)],
+    }
+
+
+@app.get("/reports/popular-routes")
+def popular_routes_report(
+    start: Annotated[date | None, BlankIsNone] = None,
+    end: Annotated[date | None, BlankIsNone] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+    format: Literal["json", "xlsx"] = "json",
+    staff_id: int = Depends(require_staff),
+):
+    start, end = report_period(start, end)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(POPULAR_ROUTES_SQL), {"start": start, "end": end, "limit": limit}
+        ).mappings().all()
+    rows = [
+        {
+            "origin": r["origin"], "origin_city": r["origin_city"],
+            "destination": r["destination"], "dest_city": r["dest_city"],
+            "bookings": r["bookings"], "revenue_cents": int(r["revenue_cents"]),
+        }
+        for r in rows
+    ]
+    columns = [
+        ("From", "origin"), ("From city", "origin_city"),
+        ("To", "destination"), ("To city", "dest_city"),
+        ("Confirmed bookings", "bookings"), ("Revenue", "revenue_cents"),
+    ]
+    return report_response("popular-routes", "Most Popular Routes", start, end, columns, rows, format)
+
+
+@app.get("/reports/frequent-cities")
+def frequent_cities_report(
+    start: Annotated[date | None, BlankIsNone] = None,
+    end: Annotated[date | None, BlankIsNone] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+    format: Literal["json", "xlsx"] = "json",
+    staff_id: int = Depends(require_staff),
+):
+    start, end = report_period(start, end)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(FREQUENT_CITIES_SQL), {"start": start, "end": end, "limit": limit}
+        ).mappings().all()
+    rows = [
+        {
+            "city": r["city"], "code": r["code"],
+            "departures": r["departures"], "arrivals": r["arrivals"],
+            "total_flights": r["total_flights"],
+        }
+        for r in rows
+    ]
+    columns = [
+        ("City", "city"), ("Airport", "code"),
+        ("Departures", "departures"), ("Arrivals", "arrivals"), ("Total flights", "total_flights"),
+    ]
+    return report_response("frequent-cities", "Most Frequently Flown Cities", start, end, columns, rows, format)
