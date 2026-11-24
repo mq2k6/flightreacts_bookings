@@ -123,25 +123,17 @@ def require_staff(user_id: int = Depends(get_current_user_id)) -> int:
 
 # AUTH-3: admin-only actions (cancel a flight, reports). staff.employee_type is
 # 'staff' or 'admin'; travelers have no staff row at all. Both get 403.
-def require_admin(user_id: int = Depends(get_current_user_id)) -> int:
+def require_admin(user_id: int = Depends(get_current_user_id)):
     with engine.connect() as conn:
         result = conn.execute(
-            text("""
-                SELECT 1
-                FROM staff
-                WHERE passenger_id = :user_id AND employee_type = 'admin'
-            """),
+            text("SELECT 1 FROM staff WHERE passenger_id = :user_id"),
             {"user_id": user_id}
         ).first()
 
     if not result:
-        raise HTTPException(
-            status_code=403,
-            detail="Admin access required"
-        )
+        raise HTTPException(status_code=403, detail="Staff access required")
 
     return user_id
-
 
 # ==============================================================
 # 3. AUTH ENDPOINTS (login, signup, employee login, /me)
@@ -495,7 +487,7 @@ def search_flights(
     if max_price is not None and (not max_price.is_finite() or max_price < 0):
         raise HTTPException(status_code=422, detail="max_price must be a number of dollars, 0 or more")
     if max_price is not None:
-        params["max_cents"] = int(max_price * 100)
+        params["max_cents"] = int(max_price)
         if tier is None:
             # No tier chosen: the flight matches if its cheapest fare fits the budget
             where.append("""AND LEAST(f.premium_fare_cents, f.standard_fare_cents,
@@ -891,7 +883,7 @@ def create_booking(req: BookingRequest, user_id: int = Depends(get_current_user_
 
                 # Prices always come from the database, never from the browser
                 fare = fares[seat["tier"]]
-                tax = (fare * BOOKING_TAX_PERCENT + 50) // 100
+                tax = (fare * BOOKING_TAX_PERCENT + 50) 
                 bag_fees = t.checked_bags * BOOKING_BAG_CENTS
                 total = fare + tax + bag_fees
                 ref = new_booking_ref()

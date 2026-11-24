@@ -50,7 +50,7 @@ const TIERS: { key: Tier; label: string; location: string }[] = [
   { key: "economy", label: "Economy", location: "Back" },
 ];
 
-const dollars = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+const dollars = (cents: number) => `$${(cents).toFixed(2)}`;
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // Sort seat numbers like 1A, 1B, ... 2A, ... 12F

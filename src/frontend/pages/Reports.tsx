@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { getEmployeeId } from "../utils/auth";
+import { getUserId, getEmployeeId, getAdmin, isAdminEmployee } from "../utils/auth";
 
 // REP-2 / REP-3: staff reports with Excel export
 
@@ -58,7 +58,7 @@ const daysFromToday = (n: number) => {
 export default function Reports() {
   const navigate = useNavigate();
   const employeeId = getEmployeeId();
-
+  const [admin, setAdmin] = useState(getAdmin());  
   const [tab, setTab] = useState<Tab>("popular-routes");
   // Same default as the backend: 90 days back to 90 days ahead
   const [start, setStart] = useState(daysFromToday(-90));

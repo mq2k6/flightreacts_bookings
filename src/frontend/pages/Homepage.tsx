@@ -282,7 +282,7 @@ function handleSubmit(e: FormEvent<HTMLFormElement>) {
             </button>
 
             {/* REP-2 / REP-3: Reports page, admins only (AUTH-3) */}
-            {employeeId!=null && isAdminEmployee() && <button
+            {employeeId!=null && admin==true && <button
             type="button"
             onClick={() => navigate("/reports")}
             className="hover:text-[#5C339E]"
