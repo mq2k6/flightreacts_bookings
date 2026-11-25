@@ -123,17 +123,25 @@ def require_staff(user_id: int = Depends(get_current_user_id)) -> int:
 
 # AUTH-3: admin-only actions (cancel a flight, reports). staff.employee_type is
 # 'staff' or 'admin'; travelers have no staff row at all. Both get 403.
-def require_admin(user_id: int = Depends(get_current_user_id)):
+def require_admin(user_id: int = Depends(get_current_user_id)) -> int:
     with engine.connect() as conn:
         result = conn.execute(
-            text("SELECT 1 FROM staff WHERE passenger_id = :user_id"),
+            text("""
+                SELECT 1
+                FROM staff
+                WHERE passenger_id = :user_id AND employee_type = 'admin'
+            """),
             {"user_id": user_id}
         ).first()
 
     if not result:
-        raise HTTPException(status_code=403, detail="Staff access required")
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required"
+        )
 
     return user_id
+
 
 # ==============================================================
 # 3. AUTH ENDPOINTS (login, signup, employee login, /me)
